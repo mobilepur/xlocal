@@ -1,0 +1,13 @@
+# Local reference copy of the original Pitchview Translator (never published)
+reference/
+
+# Build artifacts
+dist/
+xlocal
+*.test
+
+# macOS
+.DS_Store
+
+# Never commit secrets
+*api-key*
