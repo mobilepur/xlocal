@@ -71,8 +71,8 @@ func TestMissingDetection(t *testing.T) {
 			want:    nil,
 		},
 		{
-			name: "no localizations at all",
-			entry: xcstrings.StringEntry{Comment: "Greeting"},
+			name:    "no localizations at all",
+			entry:   xcstrings.StringEntry{Comment: "Greeting"},
 			targets: []string{"en", "de"},
 			want:    []string{"en", "de"},
 		},
