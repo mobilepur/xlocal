@@ -1,0 +1,45 @@
+version: 2
+
+project_name: xlocal
+
+builds:
+  - main: .
+    binary: xlocal
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - arm64
+      - amd64
+    ldflags:
+      - -s -w -X github.com/MobilePur/xlocal/cmd.Version={{.Version}}
+
+universal_binaries:
+  - replace: true
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github-native
+
+homebrew_casks:
+  - name: xlocal
+    repository:
+      owner: MobilePur
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/MobilePur/xlocal
+    description: Translate missing strings in Xcode String Catalogs using the Anthropic API
+    # The binaries are not notarized; drop the quarantine flag on install.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/xlocal"]
+          end

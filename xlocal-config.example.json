@@ -1,0 +1,8 @@
+{
+  "targetLanguages": ["en", "de", "es", "fr"],
+  "baseLanguages": ["en"],
+  "untranslatableWords": ["MyAppName", "MyFeatureBrand"],
+  "formalLanguages": ["fr"],
+  "model": "sonnet",
+  "exclude": ["Vendor", "Generated"]
+}
