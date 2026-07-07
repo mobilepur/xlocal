@@ -1,0 +1,7 @@
+{
+  "targetLanguages": ["en", "de", "fr"],
+  "baseLanguages": ["en"],
+  "untranslatableWords": ["ExampleApp"],
+  "formalLanguages": ["fr"],
+  "exclude": ["Vendor"]
+}
