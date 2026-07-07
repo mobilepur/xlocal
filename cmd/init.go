@@ -50,6 +50,7 @@ var initCmd = &cobra.Command{
 		fmt.Println("  1. Fill in " + project.ConfigFileName + " — edit it with: " + ui.Accent.Render("xlocal config"))
 		fmt.Println("  2. See what's missing: " + ui.Accent.Render("xlocal status"))
 		fmt.Println("  3. Translate: " + ui.Accent.Render("xlocal"))
+		fmt.Println(ui.Dim.Render("xlocal translates from English source strings, English developer comments and your existing translations — details: ") + ui.Accent.Render("xlocal conventions"))
 		if _, err := os.Stat(filepath.Join(dir, "CLAUDE.md")); err == nil {
 			fmt.Println(ui.Dim.Render("Tip: mention xlocal in your CLAUDE.md so AI agents know how to translate here."))
 		}

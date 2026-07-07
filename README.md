@@ -42,6 +42,7 @@ You can also run `xlocal` from a parent folder — it discovers Xcode projects b
 | `xlocal config` | Open the project config in `$VISUAL`/`$EDITOR` (falls back to vim) |
 | `xlocal config global` | Set the global default model and key |
 | `xlocal keys add/list/remove/default` | Manage multiple API keys in the keychain |
+| `xlocal conventions` | Show the catalog conventions xlocal relies on |
 | `xlocal --dry-run` | Show exactly what would be translated, without API calls |
 | `xlocal --key work` | Use a specific stored key for this run |
 
@@ -71,6 +72,15 @@ You can also run `xlocal` from a parent folder — it discovers Xcode projects b
 | `customPrompt` | Optional: replace the built-in translation prompt (placeholders `{TARGET_LANGUAGE}`, `{KEY}`, `{SOURCE_TEXT}`) |
 
 `Pods`, `DerivedData`, `node_modules`, `build`, `Carthage` and hidden directories are always skipped.
+
+## Conventions
+
+xlocal builds its translation prompts from your catalog — the quality of what goes in decides the quality of what comes out. Also available in the terminal via `xlocal conventions`.
+
+1. **English is the source language.** Write source strings in English; all other languages are translated from it.
+2. **Developer comments are written in English.** The comment of a key is sent to the model — it's your main way to give context: what the string is ("button label", "empty-state title") and where it appears.
+3. **Existing translations are the reference.** Every existing translation of a key is included in the prompt, so new languages stay consistent with your established terminology.
+4. **Brand and product names go into `untranslatableWords`.** xlocal instructs the model to keep them exactly as written and warns you when one was translated anyway.
 
 ## How translations work
 
