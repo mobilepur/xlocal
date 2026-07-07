@@ -101,9 +101,13 @@ func resolveProject() (*projectContext, error) {
 		return nil, fmt.Errorf("aborted — a config is required (xlocal init)")
 	}
 
-	cfg, err := createConfigInteractive(chosen.Dir)
+	cfg, err := createConfigSkeleton(chosen.Dir)
 	if err != nil {
 		return nil, err
+	}
+	if len(cfg.TargetLanguages) == 0 {
+		return nil, fmt.Errorf("fill in targetLanguages in %s (xlocal config), then run xlocal again",
+			filepath.Join(chosen.Dir, project.ConfigFileName))
 	}
 	return &projectContext{Root: chosen.Dir, Config: cfg}, nil
 }

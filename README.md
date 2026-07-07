@@ -24,11 +24,11 @@ go install github.com/MobilePur/xlocal@latest
 
 ```sh
 cd /path/to/YourApp
-xlocal init      # creates xlocal-config.json (asks a few questions)
+xlocal init      # creates a config skeleton and checks your API key setup
 xlocal           # shows what's missing, then translates interactively
 ```
 
-On the first run xlocal asks for an Anthropic API key and stores it in the macOS keychain. Get one at [console.anthropic.com](https://console.anthropic.com).
+`init` prefills the target languages found in your catalogs and leaves everything else empty — fill in the rest with `xlocal config`. If no API key is stored yet, `init` offers to add one to the macOS keychain. Get one at [console.anthropic.com](https://console.anthropic.com).
 
 You can also run `xlocal` from a parent folder — it discovers Xcode projects below and asks which one to use.
 
@@ -38,9 +38,10 @@ You can also run `xlocal` from a parent folder — it discovers Xcode projects b
 | --- | --- |
 | `xlocal` | The main flow: analyze → select → translate → review → save |
 | `xlocal status` | Read-only overview of missing translations (`--json` for CI) |
-| `xlocal init` | Create the project config, proposing languages found in your catalogs |
+| `xlocal init` | Set up the project: config skeleton (languages prefilled) + API key check |
+| `xlocal config` | Open the project config in `$VISUAL`/`$EDITOR` (falls back to vim) |
+| `xlocal config global` | Set the global default model and key |
 | `xlocal keys add/list/remove/default` | Manage multiple API keys in the keychain |
-| `xlocal config` | Set the global default model and key |
 | `xlocal --dry-run` | Show exactly what would be translated, without API calls |
 | `xlocal --key work` | Use a specific stored key for this run |
 

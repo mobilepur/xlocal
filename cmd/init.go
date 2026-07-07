@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,14 +11,16 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 
+	"github.com/MobilePur/xlocal/internal/keychain"
 	"github.com/MobilePur/xlocal/internal/project"
+	"github.com/MobilePur/xlocal/internal/settings"
 	"github.com/MobilePur/xlocal/internal/ui"
 	"github.com/MobilePur/xlocal/internal/xcstrings"
 )
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Create an xlocal-config.json for this project",
+	Short: "Set up xlocal for this project: config skeleton and API key check",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cwd, err := os.Getwd()
@@ -26,116 +29,202 @@ var initCmd = &cobra.Command{
 		}
 
 		if existing, ok := project.FindConfigUpwards(cwd); ok {
-			return fmt.Errorf("there is already a config at %s", existing)
+			return fmt.Errorf("there is already a config at %s — edit it with: xlocal config", existing)
 		}
 
-		_, err = createConfigInteractive(cwd)
-		return err
+		dir, err := resolveInitDir(cwd)
+		if err != nil {
+			return err
+		}
+
+		if _, err := createConfigSkeleton(dir); err != nil {
+			return err
+		}
+
+		if err := checkAPIKey(); err != nil {
+			return err
+		}
+
+		fmt.Println()
+		fmt.Println(ui.Title.Render("Next steps"))
+		fmt.Println("  1. Fill in " + project.ConfigFileName + " — edit it with: " + ui.Accent.Render("xlocal config"))
+		fmt.Println("  2. See what's missing: " + ui.Accent.Render("xlocal status"))
+		fmt.Println("  3. Translate: " + ui.Accent.Render("xlocal"))
+		if _, err := os.Stat(filepath.Join(dir, "CLAUDE.md")); err == nil {
+			fmt.Println(ui.Dim.Render("Tip: mention xlocal in your CLAUDE.md so AI agents know how to translate here."))
+		}
+		return nil
 	},
 }
 
-// createConfigInteractive builds an xlocal-config.json in dir, proposing
-// languages detected from the project's existing catalogs.
-func createConfigInteractive(dir string) (*project.Config, error) {
-	detected, sourceLangs := detectLanguages(dir)
-
-	fmt.Println(ui.Title.Render("Setting up " + project.ConfigFileName))
-	if len(detected) > 0 {
-		fmt.Println(ui.Dim.Render("Languages found in your catalogs: " + strings.Join(detected, ", ")))
+// resolveInitDir checks that init runs in a sensible place and guides the
+// user to the project root if not: catalogs below the working directory win,
+// then discovered projects below, then a project root further up.
+func resolveInitDir(cwd string) (string, error) {
+	catalogs, err := project.FindCatalogs(cwd, nil)
+	if err != nil {
+		return "", err
+	}
+	if len(catalogs) > 0 {
+		return cwd, nil
 	}
 
-	var targets []string
-	var targetsInput string
-	var form *huh.Form
-
-	if len(detected) > 0 {
-		options := make([]huh.Option[string], 0, len(detected))
-		for _, lang := range detected {
-			options = append(options, huh.NewOption(ui.Lang(lang)+"  "+lang, lang).Selected(true))
+	candidates, err := project.DiscoverProjects(cwd, 4)
+	if err != nil {
+		return "", err
+	}
+	var open []project.Candidate
+	for _, c := range candidates {
+		if !c.HasConfig {
+			open = append(open, c)
 		}
-		form = huh.NewForm(huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title("Target languages").
-				Description("Languages xlocal should keep complete. Edit the config file later to add more.").
+	}
+	if len(open) > 0 {
+		fmt.Println(ui.Dim.Render("No String Catalogs found in this folder, but there are projects below:"))
+		options := make([]huh.Option[int], 0, len(open))
+		for i, c := range open {
+			rel, relErr := filepath.Rel(cwd, c.Dir)
+			if relErr != nil || rel == "." {
+				rel = c.Dir
+			}
+			options = append(options, huh.NewOption(rel+"  "+ui.Dim.Render("("+c.Kind+")"), i))
+		}
+		var picked int
+		err := huh.NewForm(huh.NewGroup(
+			huh.NewSelect[int]().
+				Title("Where should the config go?").
 				Options(options...).
-				Value(&targets).
-				Validate(func(v []string) error {
-					if len(v) == 0 {
-						return fmt.Errorf("select at least one language")
-					}
-					return nil
-				}),
-		))
-	} else {
-		form = huh.NewForm(huh.NewGroup(
-			huh.NewInput().
-				Title("Target languages (comma-separated codes)").
-				Description("e.g. en, de, fr — no catalogs with languages were found to propose.").
-				Value(&targetsInput).
-				Validate(func(v string) error {
-					if len(parseLangList(v)) == 0 {
-						return fmt.Errorf("enter at least one language code")
-					}
-					return nil
-				}),
-		))
-	}
-	if err := form.Run(); err != nil {
-		return nil, err
-	}
-	if len(targets) == 0 {
-		targets = parseLangList(targetsInput)
+				Value(&picked),
+		)).Run()
+		if err != nil {
+			return "", err
+		}
+		return open[picked].Dir, nil
 	}
 
-	// Base languages: the catalogs' source languages that are also targets.
-	var baseLanguages []string
-	for _, lang := range sourceLangs {
-		for _, t := range targets {
-			if t == lang {
-				baseLanguages = append(baseLanguages, lang)
-				break
+	if root, ok := findProjectRootUpwards(cwd); ok {
+		var moveUp bool
+		err := huh.NewForm(huh.NewGroup(
+			huh.NewConfirm().
+				Title(fmt.Sprintf("You seem to be inside %s. Create the config there?", root)).
+				Description("The config belongs in the project root so xlocal works from any subfolder.").
+				Value(&moveUp),
+		)).Run()
+		if err != nil {
+			return "", err
+		}
+		if moveUp {
+			return root, nil
+		}
+		return cwd, nil
+	}
+
+	return "", fmt.Errorf("this doesn't look like an Xcode project (no String Catalogs, no .xcodeproj) — cd into your project root and run xlocal init again")
+}
+
+// findProjectRootUpwards walks from dir towards the filesystem root and
+// returns the first directory containing an Xcode project, workspace or
+// Swift package manifest.
+func findProjectRootUpwards(dir string) (string, bool) {
+	for {
+		entries, err := os.ReadDir(dir)
+		if err == nil {
+			for _, e := range entries {
+				name := e.Name()
+				if strings.HasSuffix(name, ".xcodeproj") || strings.HasSuffix(name, ".xcworkspace") || name == "Package.swift" {
+					return dir, true
+				}
 			}
 		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
 	}
+}
 
-	var untranslatableInput string
-	var formalLanguages []string
+// configSkeleton mirrors project.Config without omitempty, so the created
+// file shows every field there is to fill in.
+type configSkeleton struct {
+	TargetLanguages     []string `json:"targetLanguages"`
+	BaseLanguages       []string `json:"baseLanguages"`
+	UntranslatableWords []string `json:"untranslatableWords"`
+	FormalLanguages     []string `json:"formalLanguages"`
+	Model               string   `json:"model"`
+	Exclude             []string `json:"exclude"`
+}
 
-	formalOptions := make([]huh.Option[string], 0, len(targets))
-	for _, lang := range targets {
-		formalOptions = append(formalOptions, huh.NewOption(ui.Lang(lang)+"  "+lang, lang))
-	}
+// createConfigSkeleton writes an xlocal-config.json in dir with every field
+// present and empty, prefilling only the languages detected in existing
+// catalogs.
+func createConfigSkeleton(dir string) (*project.Config, error) {
+	detected, sourceLangs := detectLanguages(dir)
 
-	err := huh.NewForm(huh.NewGroup(
-		huh.NewInput().
-			Title("Untranslatable words (optional, comma-separated)").
-			Description("Brand and product names that must stay exactly as written, e.g. your app's name.").
-			Value(&untranslatableInput),
-		huh.NewMultiSelect[string]().
-			Title("Formal address (optional)").
-			Description("Languages that should address the user formally (Sie/Vous instead of du/tu).").
-			Options(formalOptions...).
-			Value(&formalLanguages),
-	)).Run()
-	if err != nil {
-		return nil, err
-	}
-
-	cfg := &project.Config{
-		TargetLanguages:     targets,
-		BaseLanguages:       baseLanguages,
-		UntranslatableWords: parseWordList(untranslatableInput),
-		FormalLanguages:     formalLanguages,
+	skeleton := configSkeleton{
+		TargetLanguages:     append([]string{}, detected...),
+		BaseLanguages:       append([]string{}, sourceLangs...),
+		UntranslatableWords: []string{},
+		FormalLanguages:     []string{},
+		Exclude:             []string{},
 	}
 
 	path := filepath.Join(dir, project.ConfigFileName)
-	if err := cfg.Save(path); err != nil {
+	data, err := json.MarshalIndent(skeleton, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
 		return nil, err
 	}
 
 	fmt.Printf("%s Created %s\n", ui.Success.Render("✓"), path)
-	fmt.Println(ui.Dim.Render("Check it into your repository — it contains no secrets. Run xlocal to start translating."))
-	return cfg, nil
+	if len(detected) > 0 {
+		fmt.Println(ui.Dim.Render("Prefilled with the languages found in your catalogs: " + strings.Join(detected, ", ")))
+	} else {
+		fmt.Println(ui.Warn.Render("⚠ No catalogs with languages found — fill in targetLanguages before translating."))
+	}
+	fmt.Println(ui.Dim.Render("Check it into your repository — it contains no secrets."))
+
+	return &project.Config{
+		TargetLanguages: skeleton.TargetLanguages,
+		BaseLanguages:   skeleton.BaseLanguages,
+	}, nil
+}
+
+// checkAPIKey verifies that an Anthropic API key is registered, offering to
+// add one right away if not.
+func checkAPIKey() error {
+	s, err := settings.Load()
+	if err != nil {
+		return err
+	}
+	if len(s.Keys) > 0 {
+		name := s.DefaultKey
+		if name == "" {
+			name = s.Keys[0]
+		}
+		fmt.Printf("%s API key %q is set up.\n", ui.Success.Render("✓"), name)
+		return nil
+	}
+
+	fmt.Println(ui.Warn.Render("⚠ No Anthropic API key stored yet."))
+	var addNow bool
+	err = huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().
+			Title("Add an API key now?").
+			Description("Stored in the macOS keychain, never on disk. Get one at console.anthropic.com.").
+			Value(&addNow),
+	)).Run()
+	if err != nil {
+		return err
+	}
+	if !addNow {
+		fmt.Println(ui.Dim.Render("Add one later with: xlocal keys add"))
+		return nil
+	}
+	_, err = addKeyInteractive(keychain.New(), s)
+	return err
 }
 
 // detectLanguages scans the project's catalogs and returns all languages
@@ -173,24 +262,6 @@ func detectLanguages(dir string) (all []string, sourceLangs []string) {
 	}
 	sort.Strings(sourceLangs)
 	return all, sourceLangs
-}
-
-func parseLangList(s string) []string {
-	return splitTrimmed(s)
-}
-
-func parseWordList(s string) []string {
-	return splitTrimmed(s)
-}
-
-func splitTrimmed(s string) []string {
-	var out []string
-	for _, part := range strings.Split(s, ",") {
-		if trimmed := strings.TrimSpace(part); trimmed != "" {
-			out = append(out, trimmed)
-		}
-	}
-	return out
 }
 
 func init() {
