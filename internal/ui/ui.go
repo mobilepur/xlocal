@@ -25,6 +25,8 @@ var flags = map[string]string{
 	"en-US": "🇺🇸",
 	"es":    "🇪🇸",
 	"fr":    "🇫🇷",
+	"hi":    "🇮🇳",
+	"id":    "🇮🇩",
 	"it":    "🇮🇹",
 	"ja":    "🇯🇵",
 	"ko":    "🇰🇷",
@@ -34,8 +36,10 @@ var flags = map[string]string{
 	"pt-PT": "🇵🇹",
 	"ru":    "🇷🇺",
 	"sv":    "🇸🇪",
+	"th":    "🇹🇭",
 	"tr":    "🇹🇷",
 	"uk":    "🇺🇦",
+	"vi":    "🇻🇳",
 	"zh":    "🇨🇳",
 }
 
@@ -54,4 +58,23 @@ func Flag(lang string) string {
 // Lang renders a language code with its flag, e.g. "🇩🇪 DE".
 func Lang(lang string) string {
 	return fmt.Sprintf("%s %s", Flag(lang), strings.ToUpper(lang))
+}
+
+// LangPadded renders a language code like Lang, padding the code to width so
+// that whatever follows lines up across languages of different lengths
+// (e.g. "DE" vs "ZH-HANS").
+func LangPadded(lang string, width int) string {
+	return fmt.Sprintf("%s %-*s", Flag(lang), width, strings.ToUpper(lang))
+}
+
+// MaxLangWidth returns the length of the longest language code in langs,
+// for use as the width argument of LangPadded.
+func MaxLangWidth(langs []string) int {
+	width := 0
+	for _, lang := range langs {
+		if len(lang) > width {
+			width = len(lang)
+		}
+	}
+	return width
 }

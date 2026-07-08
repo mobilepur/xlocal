@@ -171,6 +171,13 @@ func runTranslateFlow() error {
 func runTranslations(ctx context.Context, client *anthropic.Client, batch []analyze.Missing, opts translate.Options) []translate.Result {
 	done := 0
 	total := len(batch)
+	counterWidth := len(fmt.Sprint(total))
+
+	langs := make([]string, len(batch))
+	for i, m := range batch {
+		langs[i] = m.TargetLanguage
+	}
+	langWidth := ui.MaxLangWidth(langs)
 
 	return translate.Run(ctx, batch, 4, func(ctx context.Context, m analyze.Missing) (string, error) {
 		raw, err := client.Complete(ctx, translate.BuildPrompt(m, opts))
@@ -180,15 +187,16 @@ func runTranslations(ctx context.Context, client *anthropic.Client, batch []anal
 		return translate.CleanTranslation(raw), nil
 	}, func(r translate.Result) {
 		done++
-		prefix := ui.Dim.Render(fmt.Sprintf("[%d/%d]", done, total))
+		prefix := ui.Dim.Render(fmt.Sprintf("[%*d/%d]", counterWidth, done, total))
+		lang := ui.LangPadded(r.Missing.TargetLanguage, langWidth)
 		if r.Err != nil {
 			if ctx.Err() != nil {
 				return // don't spam lines for cancelled leftovers
 			}
-			fmt.Printf("%s %s %s  %s\n", prefix, ui.Lang(r.Missing.TargetLanguage), r.Missing.Key, ui.Error.Render("✗ "+r.Err.Error()))
+			fmt.Printf("%s %s %s  %s\n", prefix, lang, r.Missing.Key, ui.Error.Render("✗ "+r.Err.Error()))
 			return
 		}
-		fmt.Printf("%s %s %s %s %s\n", prefix, ui.Lang(r.Missing.TargetLanguage), ui.Dim.Render(r.Missing.Key+" →"), r.Translation, "")
+		fmt.Printf("%s %s %s %s\n", prefix, lang, ui.Dim.Render(r.Missing.Key+" →"), r.Translation)
 	})
 }
 
@@ -440,8 +448,9 @@ func printDryRun(reports []*analyze.Report, pc *projectContext) {
 			continue
 		}
 		fmt.Printf("\n%s\n", ui.Title.Render(displayPath(pc.Root, r.FilePath)))
+		langWidth := ui.MaxLangWidth(r.TargetLanguages)
 		for _, m := range r.Missing {
-			fmt.Printf("  %s %s %s\n", ui.Lang(m.TargetLanguage), m.Key, ui.Dim.Render("← "+m.SourceText))
+			fmt.Printf("  %s %s %s\n", ui.LangPadded(m.TargetLanguage, langWidth), m.Key, ui.Dim.Render("← "+m.SourceText))
 		}
 	}
 }
