@@ -116,11 +116,16 @@ func (c *Client) completeOnce(ctx context.Context, body []byte) (text string, re
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return "", false, err
 	}
-	if len(parsed.Content) == 0 {
-		return "", false, fmt.Errorf("no content in response")
-	}
 
-	return strings.TrimSpace(parsed.Content[0].Text), false, nil
+	var sb strings.Builder
+	for _, block := range parsed.Content {
+		sb.WriteString(block.Text)
+	}
+	text = strings.TrimSpace(sb.String())
+	if text == "" {
+		return "", true, fmt.Errorf("no text in response")
+	}
+	return text, false, nil
 }
 
 type modelsResponse struct {

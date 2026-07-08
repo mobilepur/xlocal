@@ -143,7 +143,8 @@ func entryValue(loc xcstrings.LocalizationEntry) (string, bool) {
 }
 
 // hasCompleteTranslation reports whether lang is fully translated: a
-// non-empty string unit, or for plurals both "one" and "other" forms.
+// non-empty string unit, or for plurals a non-empty form for every CLDR
+// plural category of the language.
 func hasCompleteTranslation(localizations map[string]xcstrings.LocalizationEntry, lang string) bool {
 	loc, ok := localizations[lang]
 	if !ok {
@@ -153,10 +154,13 @@ func hasCompleteTranslation(localizations map[string]xcstrings.LocalizationEntry
 		return true
 	}
 	if loc.Variations != nil && loc.Variations.Plural != nil {
-		one, hasOne := loc.Variations.Plural["one"]
-		other, hasOther := loc.Variations.Plural["other"]
-		return hasOne && strings.TrimSpace(one.StringUnit.Value) != "" &&
-			hasOther && strings.TrimSpace(other.StringUnit.Value) != ""
+		for _, category := range xcstrings.PluralCategories(lang) {
+			form, ok := loc.Variations.Plural[category]
+			if !ok || strings.TrimSpace(form.StringUnit.Value) == "" {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }

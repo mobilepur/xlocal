@@ -51,6 +51,21 @@ func TestBuildPromptPluralInstruction(t *testing.T) {
 	}
 }
 
+// Russian must be asked for all four CLDR categories, not the source
+// language's one/other pair.
+func TestBuildPromptPluralCategoriesPerLanguage(t *testing.T) {
+	m := baseMissing()
+	m.IsPlural = true
+	m.TargetLanguage = "ru"
+
+	prompt := BuildPrompt(m, Options{})
+	for _, want := range []string{"one:", "few:", "many:", "other:"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("Russian plural prompt missing %q", want)
+		}
+	}
+}
+
 func TestBuildPromptFormality(t *testing.T) {
 	m := baseMissing()
 	m.TargetLanguage = "fr"
@@ -98,23 +113,52 @@ func TestBuildPromptCustomTemplate(t *testing.T) {
 	}
 }
 
-func TestParsePluralResponse(t *testing.T) {
+func TestParsePluralForms(t *testing.T) {
 	tests := []struct {
-		in        string
-		wantOne   string
-		wantOther string
+		in         string
+		categories []string
+		want       map[string]string
 	}{
-		{"one: 1 Seite | other: %lld Seiten", "1 Seite", "%lld Seiten"},
-		{"  one: 1 page |  other: %lld pages ", "1 page", "%lld pages"},
-		// Fallback: model ignored the format → whole text as "other".
-		{"%lld Seiten", "1 Seiten", "%lld Seiten"},
+		{"one: 1 Seite | other: %lld Seiten", []string{"one", "other"},
+			map[string]string{"one": "1 Seite", "other": "%lld Seiten"}},
+		{"  one: 1 page |  other: %lld pages ", []string{"one", "other"},
+			map[string]string{"one": "1 page", "other": "%lld pages"}},
+		{"one: %lld урок | few: %lld урока | many: %lld уроков | other: %lld урока", []string{"one", "few", "many", "other"},
+			map[string]string{"one": "%lld урок", "few": "%lld урока", "many": "%lld уроков", "other": "%lld урока"}},
+		// Single-category language: a plain response counts as that category.
+		{"%lld語", []string{"other"},
+			map[string]string{"other": "%lld語"}},
+		// Ignored format with several categories: nothing parsed, caller retries.
+		{"%lld Seiten", []string{"one", "other"},
+			map[string]string{}},
 	}
 
 	for _, tt := range tests {
-		one, other := ParsePluralResponse(tt.in)
-		if one != tt.wantOne || other != tt.wantOther {
-			t.Errorf("ParsePluralResponse(%q) = %q, %q; want %q, %q", tt.in, one, other, tt.wantOne, tt.wantOther)
+		got := ParsePluralForms(tt.in, tt.categories)
+		if len(got) != len(tt.want) {
+			t.Errorf("ParsePluralForms(%q) = %v; want %v", tt.in, got, tt.want)
+			continue
 		}
+		for category, want := range tt.want {
+			if got[category] != want {
+				t.Errorf("ParsePluralForms(%q)[%s] = %q; want %q", tt.in, category, got[category], want)
+			}
+		}
+	}
+}
+
+func TestValidatePluralForms(t *testing.T) {
+	if err := ValidatePluralForms("one: %lld урок | few: %lld урока | many: %lld уроков | other: %lld урока", "ru"); err != nil {
+		t.Errorf("complete Russian response rejected: %v", err)
+	}
+	if err := ValidatePluralForms("one: Изучено %lld слово | other: Изучено %lld слов", "ru"); err == nil {
+		t.Error("Russian response without few/many accepted")
+	}
+	if err := ValidatePluralForms("", "ru"); err == nil {
+		t.Error("empty response accepted")
+	}
+	if err := ValidatePluralForms("%lld語", "ja"); err != nil {
+		t.Errorf("plain single-category response rejected: %v", err)
 	}
 }
 

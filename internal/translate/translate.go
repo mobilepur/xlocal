@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/MobilePur/xlocal/internal/analyze"
+	"github.com/MobilePur/xlocal/internal/xcstrings"
 )
 
 // DefaultTemplate is the built-in translation prompt. Projects can override
@@ -62,11 +63,16 @@ func BuildPrompt(m analyze.Missing, opts Options) string {
 	context.WriteString(fmt.Sprintf("\nLOCALIZATION KEY: %s", m.Key))
 
 	if m.IsPlural {
+		categories := xcstrings.PluralCategories(m.TargetLanguage)
+		placeholders := make([]string, len(categories))
+		for i, category := range categories {
+			placeholders[i] = fmt.Sprintf("%s: [%s form]", category, category)
+		}
 		context.WriteString("\n\nPLURAL FORM REQUIRED:")
-		context.WriteString("\nThis is a PLURAL string that needs both singular (one) and plural (other) forms.")
-		context.WriteString("\nFormat your response as: one: [singular form] | other: [plural form]")
-		context.WriteString("\nExample: one: 1 document | other: %lld documents")
-		context.WriteString("\nThe plural form should use %lld as the placeholder for the number.")
+		context.WriteString(fmt.Sprintf("\nThis is a PLURAL string. %s uses the CLDR plural categories %s — provide every one of them.", strings.ToUpper(m.TargetLanguage), strings.Join(categories, ", ")))
+		context.WriteString(fmt.Sprintf("\nFormat your response as a single line: %s", strings.Join(placeholders, " | ")))
+		context.WriteString("\nExample for Russian: one: %lld урок | few: %lld урока | many: %lld уроков | other: %lld урока")
+		context.WriteString("\nEvery form must keep %lld as the placeholder for the number — never spell the number out (categories like 'one' also cover 21, 31, … in some languages).")
 	}
 
 	if m.Comment != "" {
@@ -121,24 +127,45 @@ func isFormal(lang string, formalLanguages []string) bool {
 	return false
 }
 
-// ParsePluralResponse splits a "one: ... | other: ..." model response into
-// its plural forms. If the model ignored the format, the whole text becomes
-// the "other" form and a singular is derived from it.
-func ParsePluralResponse(response string) (one, other string) {
+// ParsePluralForms splits a "one: … | few: … | other: …" model response into
+// its plural forms, keyed by category. Categories the response does not carry
+// are absent from the result. For single-category languages (Japanese,
+// Chinese, …) a plain unprefixed response counts as that category.
+func ParsePluralForms(response string, categories []string) map[string]string {
+	forms := make(map[string]string)
 	for _, part := range strings.Split(response, " | ") {
 		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "one: ") {
-			one = strings.TrimSpace(strings.TrimPrefix(part, "one: "))
-		} else if strings.HasPrefix(part, "other: ") {
-			other = strings.TrimSpace(strings.TrimPrefix(part, "other: "))
+		for _, category := range categories {
+			if rest, ok := strings.CutPrefix(part, category+": "); ok {
+				forms[category] = strings.TrimSpace(rest)
+			}
 		}
 	}
 
-	if one == "" || other == "" {
-		other = strings.TrimSpace(response)
-		one = strings.ReplaceAll(other, "%lld", "1")
+	if len(forms) == 0 && len(categories) == 1 {
+		if value := strings.TrimSpace(response); value != "" {
+			forms[categories[0]] = value
+		}
 	}
-	return one, other
+	return forms
+}
+
+// ValidatePluralForms checks that a plural response carries a non-empty form
+// for every CLDR plural category of the target language.
+func ValidatePluralForms(response, lang string) error {
+	categories := xcstrings.PluralCategories(lang)
+	forms := ParsePluralForms(response, categories)
+
+	var missing []string
+	for _, category := range categories {
+		if strings.TrimSpace(forms[category]) == "" {
+			missing = append(missing, category)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("plural response is missing the %s form(s): %q", strings.Join(missing, ", "), response)
+	}
+	return nil
 }
 
 // CleanTranslation trims whitespace and one pair of surrounding quotes that

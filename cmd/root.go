@@ -184,7 +184,16 @@ func runTranslations(ctx context.Context, client *anthropic.Client, batch []anal
 		if err != nil {
 			return "", err
 		}
-		return translate.CleanTranslation(raw), nil
+		cleaned := translate.CleanTranslation(raw)
+		if cleaned == "" {
+			return "", fmt.Errorf("model returned an empty translation")
+		}
+		if m.IsPlural {
+			if err := translate.ValidatePluralForms(cleaned, m.TargetLanguage); err != nil {
+				return "", err
+			}
+		}
+		return cleaned, nil
 	}, func(r translate.Result) {
 		done++
 		prefix := ui.Dim.Render(fmt.Sprintf("[%*d/%d]", counterWidth, done, total))
@@ -308,8 +317,8 @@ func writeResults(ok []translate.Result, root string) error {
 
 		for _, r := range byFile[path] {
 			if r.Missing.IsPlural {
-				one, other := translate.ParsePluralResponse(r.Translation)
-				err = catalog.SetPluralTranslation(r.Missing.Key, r.Missing.TargetLanguage, one, other)
+				forms := translate.ParsePluralForms(r.Translation, xcstrings.PluralCategories(r.Missing.TargetLanguage))
+				err = catalog.SetPluralTranslations(r.Missing.Key, r.Missing.TargetLanguage, forms)
 			} else {
 				err = catalog.SetTranslation(r.Missing.Key, r.Missing.TargetLanguage, r.Translation)
 			}

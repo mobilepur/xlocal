@@ -113,28 +113,55 @@ func TestSetTranslationUnknownKey(t *testing.T) {
 	}
 }
 
-func TestSetPluralTranslation(t *testing.T) {
+func TestSetPluralTranslations(t *testing.T) {
 	file, err := Load(filepath.Join("testdata", "plural.xcstrings"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := file.SetPluralTranslation("documentPages", "fr", "1 page", "%lld pages"); err != nil {
-		t.Fatalf("SetPluralTranslation: %v", err)
+	forms := map[string]string{"one": "%lld урок", "few": "%lld урока", "many": "%lld уроков", "other": "%lld урока"}
+	if err := file.SetPluralTranslations("documentPages", "ru", forms); err != nil {
+		t.Fatalf("SetPluralTranslations: %v", err)
 	}
 
-	loc := file.Strings["documentPages"].Localizations["fr"]
+	loc := file.Strings["documentPages"].Localizations["ru"]
 	if loc.Variations == nil || loc.Variations.Plural == nil {
 		t.Fatal("plural variations not set")
 	}
-	if got := loc.Variations.Plural["one"].StringUnit.Value; got != "1 page" {
-		t.Errorf(`one = %q, want "1 page"`, got)
+	for category, want := range forms {
+		if got := loc.Variations.Plural[category].StringUnit.Value; got != want {
+			t.Errorf("%s = %q, want %q", category, got, want)
+		}
+		if got := loc.Variations.Plural[category].StringUnit.State; got != "translated" {
+			t.Errorf(`%s state = %q, want "translated"`, category, got)
+		}
 	}
-	if got := loc.Variations.Plural["other"].StringUnit.Value; got != "%lld pages" {
-		t.Errorf(`other = %q, want "%%lld pages"`, got)
+}
+
+func TestPluralCategories(t *testing.T) {
+	tests := []struct {
+		lang string
+		want []string
+	}{
+		{"de", []string{"one", "other"}},
+		{"ru", []string{"one", "few", "many", "other"}},
+		{"ja", []string{"other"}},
+		{"zh-Hans", []string{"other"}},
+		{"pt-BR", []string{"one", "other"}},
+		{"ar", []string{"zero", "one", "two", "few", "many", "other"}},
 	}
-	if got := loc.Variations.Plural["other"].StringUnit.State; got != "translated" {
-		t.Errorf(`state = %q, want "translated"`, got)
+	for _, tt := range tests {
+		got := PluralCategories(tt.lang)
+		if len(got) != len(tt.want) {
+			t.Errorf("PluralCategories(%q) = %v; want %v", tt.lang, got, tt.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("PluralCategories(%q) = %v; want %v", tt.lang, got, tt.want)
+				break
+			}
+		}
 	}
 }
 

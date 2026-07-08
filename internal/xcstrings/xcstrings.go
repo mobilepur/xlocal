@@ -89,27 +89,65 @@ func (f *File) SetTranslation(key, lang, value string) error {
 	return nil
 }
 
-// SetPluralTranslation sets a plural translation with "one" and "other"
-// forms for key in lang.
-func (f *File) SetPluralTranslation(key, lang, one, other string) error {
+// SetPluralTranslations sets a plural translation for key in lang, one form
+// per CLDR category (e.g. one/few/many/other for Russian).
+func (f *File) SetPluralTranslations(key, lang string, forms map[string]string) error {
 	entry, ok := f.Strings[key]
 	if !ok {
 		return fmt.Errorf("key %q not found in catalog", key)
 	}
 
+	plural := make(map[string]PluralCase, len(forms))
+	for category, value := range forms {
+		plural[category] = PluralCase{StringUnit: StringUnit{State: StateTranslated, Value: value}}
+	}
 	if entry.Localizations == nil {
 		entry.Localizations = make(map[string]LocalizationEntry)
 	}
 	entry.Localizations[lang] = LocalizationEntry{
-		Variations: &PluralVariations{
-			Plural: map[string]PluralCase{
-				"one":   {StringUnit: StringUnit{State: StateTranslated, Value: one}},
-				"other": {StringUnit: StringUnit{State: StateTranslated, Value: other}},
-			},
-		},
+		Variations: &PluralVariations{Plural: plural},
 	}
 	f.Strings[key] = entry
 	return nil
+}
+
+// pluralCategories holds the CLDR cardinal plural categories per language
+// where they differ from the default one/other — the forms a count string
+// must cover for correct grammar (e.g. Russian "1 урок, 2 урока, 5 уроков").
+var pluralCategories = map[string][]string{
+	"ar": {"zero", "one", "two", "few", "many", "other"},
+	"cs": {"one", "few", "many", "other"},
+	"he": {"one", "two", "many", "other"},
+	"id": {"other"},
+	"ja": {"other"},
+	"ko": {"other"},
+	"lt": {"one", "few", "many", "other"},
+	"lv": {"zero", "one", "other"},
+	"ms": {"other"},
+	"pl": {"one", "few", "many", "other"},
+	"ro": {"one", "few", "other"},
+	"ru": {"one", "few", "many", "other"},
+	"sk": {"one", "few", "many", "other"},
+	"sr": {"one", "few", "other"},
+	"th": {"other"},
+	"uk": {"one", "few", "many", "other"},
+	"vi": {"other"},
+	"zh": {"other"},
+}
+
+// PluralCategories returns the CLDR plural categories a language's plural
+// strings must provide. Region subtags are stripped (pt-BR → pt); unknown
+// languages default to one/other.
+func PluralCategories(lang string) []string {
+	if categories, ok := pluralCategories[lang]; ok {
+		return categories
+	}
+	if base, _, found := strings.Cut(lang, "-"); found {
+		if categories, ok := pluralCategories[base]; ok {
+			return categories
+		}
+	}
+	return []string{"one", "other"}
 }
 
 // Marshal serializes the catalog in Xcode's exact String Catalog format.
