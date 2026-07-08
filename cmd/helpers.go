@@ -265,15 +265,21 @@ func printStatus(reports []*analyze.Report, root string) {
 			missingByLang[m.TargetLanguage]++
 		}
 
-		var parts []string
-		for _, lang := range report.TargetLanguages {
-			if n := missingByLang[lang]; n > 0 {
-				parts = append(parts, ui.Error.Render(fmt.Sprintf("%s %d missing", ui.Lang(lang), n)))
-			} else {
-				parts = append(parts, ui.Success.Render(fmt.Sprintf("%s ✓", ui.Lang(lang))))
+		langWidth := ui.MaxLangWidth(report.TargetLanguages)
+		countWidth := 1
+		for _, n := range missingByLang {
+			if w := len(fmt.Sprint(n)); w > countWidth {
+				countWidth = w
 			}
 		}
-		fmt.Println("   " + strings.Join(parts, ui.Dim.Render("  ·  ")))
+
+		for _, lang := range report.TargetLanguages {
+			if n := missingByLang[lang]; n > 0 {
+				fmt.Printf("   %s %s\n", ui.LangPadded(lang, langWidth), ui.Error.Render(fmt.Sprintf("%*d missing", countWidth, n)))
+			} else {
+				fmt.Printf("   %s %s\n", ui.LangPadded(lang, langWidth), ui.Success.Render(fmt.Sprintf("%*s", countWidth, "✓")))
+			}
+		}
 		fmt.Println(ui.Dim.Render(fmt.Sprintf("   %d strings, %d translations missing", report.TotalStrings, len(report.Missing))))
 	}
 }
