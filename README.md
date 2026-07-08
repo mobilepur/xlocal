@@ -42,6 +42,7 @@ You can also run `xlocal` from a parent folder — it discovers Xcode projects b
 | `xlocal config` | Open the project config in `$VISUAL`/`$EDITOR` (falls back to vim) |
 | `xlocal config global` | Set the global default model and key |
 | `xlocal keys add/list/remove/default` | Manage multiple API keys in the keychain |
+| `xlocal deintegrate` | Remove xlocal from the project: delete the config in the current folder |
 | `xlocal conventions` | Show the catalog conventions xlocal relies on |
 | `xlocal --dry-run` | Show exactly what would be translated, without API calls |
 | `xlocal --key work` | Use a specific stored key for this run |
