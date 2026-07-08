@@ -4,5 +4,6 @@
   "untranslatableWords": ["MyAppName", "MyFeatureBrand"],
   "formalLanguages": ["fr"],
   "model": "sonnet",
-  "exclude": ["Vendor", "Generated"]
+  "exclude": ["Vendor", "Generated"],
+  "excludeKeys": ["legal.disclaimer"]
 }

@@ -102,7 +102,7 @@ func TestMissingDetection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			report := File("test.xcstrings", catalog(map[string]xcstrings.StringEntry{"key": tt.entry}), tt.targets)
+			report := File("test.xcstrings", catalog(map[string]xcstrings.StringEntry{"key": tt.entry}), tt.targets, nil)
 
 			var got []string
 			for _, m := range report.Missing {
@@ -112,6 +112,52 @@ func TestMissingDetection(t *testing.T) {
 				t.Errorf("missing languages = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSkipsDontTranslateKeys(t *testing.T) {
+	no, yes := false, true
+	entries := map[string]xcstrings.StringEntry{
+		"appName": {
+			ShouldTranslate: &no,
+			Localizations:   map[string]xcstrings.LocalizationEntry{"en": stringUnit("Flashcards")},
+		},
+		"greeting": {
+			ShouldTranslate: &yes,
+			Localizations:   map[string]xcstrings.LocalizationEntry{"en": stringUnit("Hello")},
+		},
+	}
+	report := File("test.xcstrings", catalog(entries), []string{"de"}, nil)
+
+	if len(report.Missing) != 1 || report.Missing[0].Key != "greeting" {
+		t.Errorf("Missing = %v, want only greeting", report.Missing)
+	}
+}
+
+func TestSkipsExcludedKeys(t *testing.T) {
+	entries := map[string]xcstrings.StringEntry{
+		"count": {Localizations: map[string]xcstrings.LocalizationEntry{"en": stringUnit("Count")}},
+		"hello": {Localizations: map[string]xcstrings.LocalizationEntry{"en": stringUnit("Hello")}},
+	}
+	report := File("test.xcstrings", catalog(entries), []string{"de"}, []string{"count"})
+
+	if len(report.Missing) != 1 || report.Missing[0].Key != "hello" {
+		t.Errorf("Missing = %v, want only hello", report.Missing)
+	}
+}
+
+func TestSkipsBlankSourceText(t *testing.T) {
+	entries := map[string]xcstrings.StringEntry{
+		// An empty key without source value or comment has nothing to
+		// translate and must not be sent to the API.
+		"": {},
+		// An empty key with a real source value is translatable.
+		" ": {Localizations: map[string]xcstrings.LocalizationEntry{"en": stringUnit("Space")}},
+	}
+	report := File("test.xcstrings", catalog(entries), []string{"de"}, nil)
+
+	if len(report.Missing) != 1 || report.Missing[0].SourceText != "Space" {
+		t.Errorf("Missing = %v, want only the entry with source text", report.Missing)
 	}
 }
 
@@ -154,7 +200,7 @@ func TestSourceTextFallbackChain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			report := File("test.xcstrings", catalog(map[string]xcstrings.StringEntry{"greetingKey": tt.entry}), []string{"de"})
+			report := File("test.xcstrings", catalog(map[string]xcstrings.StringEntry{"greetingKey": tt.entry}), []string{"de"}, nil)
 			if len(report.Missing) == 0 {
 				t.Fatal("expected missing translations")
 			}
@@ -174,7 +220,7 @@ func TestExistingTranslationsContext(t *testing.T) {
 			"es": plural("1 hola", "%lld holas"),
 		},
 	}
-	report := File("test.xcstrings", catalog(map[string]xcstrings.StringEntry{"key": entry}), []string{"de"})
+	report := File("test.xcstrings", catalog(map[string]xcstrings.StringEntry{"key": entry}), []string{"de"}, nil)
 
 	if len(report.Missing) != 1 {
 		t.Fatalf("expected 1 missing, got %d", len(report.Missing))
@@ -200,7 +246,7 @@ func TestExistingDropsUntranslatedSourceLanguage(t *testing.T) {
 			"fr": stringUnit("Bonjour"),
 		},
 	}
-	report := File("test.xcstrings", catalog(map[string]xcstrings.StringEntry{"key": entry}), []string{"de"})
+	report := File("test.xcstrings", catalog(map[string]xcstrings.StringEntry{"key": entry}), []string{"de"}, nil)
 
 	existing := report.Missing[0].Existing
 	if _, ok := existing["en"]; ok {
@@ -220,7 +266,7 @@ func TestIsPluralFlag(t *testing.T) {
 			"en": stringUnit("Hello"),
 		}},
 	}
-	report := File("test.xcstrings", catalog(entries), []string{"de"})
+	report := File("test.xcstrings", catalog(entries), []string{"de"}, nil)
 
 	byKey := map[string]bool{}
 	for _, m := range report.Missing {
@@ -238,7 +284,7 @@ func TestDeterministicOrder(t *testing.T) {
 	entries := map[string]xcstrings.StringEntry{
 		"zebra": {}, "apple": {}, "Mango": {},
 	}
-	report := File("test.xcstrings", catalog(entries), []string{"de", "fr"})
+	report := File("test.xcstrings", catalog(entries), []string{"de", "fr"}, nil)
 
 	var got []string
 	for _, m := range report.Missing {
@@ -255,7 +301,7 @@ func TestReportCounts(t *testing.T) {
 		"a": {Localizations: map[string]xcstrings.LocalizationEntry{"en": stringUnit("A"), "de": stringUnit("A")}},
 		"b": {Localizations: map[string]xcstrings.LocalizationEntry{"en": stringUnit("B")}},
 	}
-	report := File("test.xcstrings", catalog(entries), []string{"en", "de"})
+	report := File("test.xcstrings", catalog(entries), []string{"en", "de"}, nil)
 
 	if report.TotalStrings != 2 {
 		t.Errorf("TotalStrings = %d, want 2", report.TotalStrings)

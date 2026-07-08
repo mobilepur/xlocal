@@ -25,6 +25,9 @@ type StringEntry struct {
 	Comment         string                       `json:"comment,omitempty"`
 	ExtractionState string                       `json:"extractionState,omitempty"`
 	Localizations   map[string]LocalizationEntry `json:"localizations,omitempty"`
+	// ShouldTranslate is Xcode's "Don't Translate" flag; a pointer so that an
+	// explicit false survives the load/save round trip.
+	ShouldTranslate *bool `json:"shouldTranslate,omitempty"`
 }
 
 type LocalizationEntry struct {

@@ -33,7 +33,11 @@ type Report struct {
 // File analyzes a catalog for missing translations in targetLanguages.
 // Results are ordered deterministically: keys in Xcode catalog order,
 // languages in targetLanguages order.
-func File(path string, catalog *xcstrings.File, targetLanguages []string) *Report {
+//
+// Keys marked "Don't Translate" in Xcode (shouldTranslate: false), keys
+// listed in excludeKeys, and keys with no translatable source text are
+// skipped.
+func File(path string, catalog *xcstrings.File, targetLanguages []string, excludeKeys []string) *Report {
 	report := &Report{
 		FilePath:        path,
 		TargetLanguages: targetLanguages,
@@ -49,8 +53,20 @@ func File(path string, catalog *xcstrings.File, targetLanguages []string) *Repor
 			(strings.ToLower(keys[i]) == strings.ToLower(keys[j]) && keys[i] < keys[j])
 	})
 
+	excluded := make(map[string]bool, len(excludeKeys))
+	for _, key := range excludeKeys {
+		excluded[key] = true
+	}
+
 	for _, key := range keys {
 		entry := catalog.Strings[key]
+
+		if excluded[key] {
+			continue
+		}
+		if entry.ShouldTranslate != nil && !*entry.ShouldTranslate {
+			continue
+		}
 
 		sourceValue, hasSourceTranslation := localizedValue(entry.Localizations, catalog.SourceLanguage)
 
@@ -59,6 +75,12 @@ func File(path string, catalog *xcstrings.File, targetLanguages []string) *Repor
 			sourceText = sourceValue
 		} else if entry.Comment != "" {
 			sourceText = entry.Comment
+		}
+
+		// Nothing to translate: blank key without a source value or comment
+		// (e.g. an empty key that slipped into the catalog).
+		if strings.TrimSpace(sourceText) == "" {
+			continue
 		}
 
 		isPlural := false

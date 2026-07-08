@@ -235,7 +235,7 @@ func analyzeProject(pc *projectContext) ([]*analyze.Report, error) {
 			fmt.Println(ui.Warn.Render(fmt.Sprintf("⚠ skipping %s: %v", displayPath(pc.Root, path), err)))
 			continue
 		}
-		reports = append(reports, analyze.File(path, catalog, pc.Config.TargetLanguages))
+		reports = append(reports, analyze.File(path, catalog, pc.Config.TargetLanguages, pc.Config.ExcludeKeys))
 	}
 
 	sort.SliceStable(reports, func(i, j int) bool {

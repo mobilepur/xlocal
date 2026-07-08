@@ -58,7 +58,8 @@ You can also run `xlocal` from a parent folder — it discovers Xcode projects b
   "untranslatableWords": ["MyAppName"],
   "formalLanguages": ["fr"],
   "model": "sonnet",
-  "exclude": ["Vendor", "Generated"]
+  "exclude": ["Vendor", "Generated"],
+  "excludeKeys": ["legal.disclaimer"]
 }
 ```
 
@@ -70,9 +71,10 @@ You can also run `xlocal` from a parent folder — it discovers Xcode projects b
 | `formalLanguages` | Languages that address the user formally (Sie/Vous) |
 | `model` | `sonnet` (default), `haiku`, `opus`, or a full model ID — overrides the global setting |
 | `exclude` | Directory names or relative paths to skip |
+| `excludeKeys` | String keys xlocal never translates |
 | `customPrompt` | Optional: replace the built-in translation prompt (placeholders `{TARGET_LANGUAGE}`, `{KEY}`, `{SOURCE_TEXT}`) |
 
-`Pods`, `DerivedData`, `node_modules`, `build`, `Carthage` and hidden directories are always skipped.
+`Pods`, `DerivedData`, `node_modules`, `build`, `Carthage` and hidden directories are always skipped. Strings marked **Don't Translate** in Xcode (`shouldTranslate: false`) and keys without any translatable source text are skipped as well.
 
 ## Conventions
 

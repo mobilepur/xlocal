@@ -23,6 +23,7 @@ type Config struct {
 	FormalLanguages     []string `json:"formalLanguages,omitempty"`
 	Model               string   `json:"model,omitempty"`
 	Exclude             []string `json:"exclude,omitempty"`
+	ExcludeKeys         []string `json:"excludeKeys,omitempty"`
 	CustomPrompt        string   `json:"customPrompt,omitempty"`
 }
 

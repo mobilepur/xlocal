@@ -154,6 +154,7 @@ type configSkeleton struct {
 	FormalLanguages     []string `json:"formalLanguages"`
 	Model               string   `json:"model"`
 	Exclude             []string `json:"exclude"`
+	ExcludeKeys         []string `json:"excludeKeys"`
 }
 
 // createConfigSkeleton writes an xlocal-config.json in dir with every field
@@ -168,6 +169,7 @@ func createConfigSkeleton(dir string) (*project.Config, error) {
 		UntranslatableWords: []string{},
 		FormalLanguages:     []string{},
 		Exclude:             []string{},
+		ExcludeKeys:         []string{},
 	}
 
 	path := filepath.Join(dir, project.ConfigFileName)
