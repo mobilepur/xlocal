@@ -129,17 +129,22 @@ func runTranslateFlow() error {
 	defer stop()
 
 	client := anthropic.New(apiKey, modelID)
-	opts := translate.Options{
-		Template:            pc.Config.CustomPrompt,
-		UntranslatableWords: pc.Config.UntranslatableWords,
-		FormalLanguages:     pc.Config.FormalLanguages,
+	// Options are resolved per catalog: untranslatable words, formality and a
+	// custom prompt can each differ between nested configs.
+	optsFor := func(path string) translate.Options {
+		cfg := pc.configFor(path)
+		return translate.Options{
+			Template:            cfg.CustomPrompt,
+			UntranslatableWords: cfg.UntranslatableWords,
+			FormalLanguages:     cfg.FormalLanguages,
+		}
 	}
 
-	results := runTranslations(ctx, client, batch, opts)
+	results := runTranslations(ctx, client, batch, optsFor)
 	stop()
 
 	// Offer a retry round for failures (skipping cancelled items).
-	results = retryFailures(results, client, opts)
+	results = retryFailures(results, client, optsFor)
 
 	ok, failed := splitResults(results)
 	printRunSummary(ok, failed)
@@ -148,7 +153,7 @@ func runTranslateFlow() error {
 	}
 
 	// Review warnings for brand words that got translated anyway.
-	printViolationWarnings(ok, pc.Config.UntranslatableWords)
+	printViolationWarnings(ok, pc)
 
 	var save bool
 	err = huh.NewForm(huh.NewGroup(
@@ -167,8 +172,10 @@ func runTranslateFlow() error {
 	return writeResults(ok, pc.Root)
 }
 
-// runTranslations executes the worker pool with live per-item output.
-func runTranslations(ctx context.Context, client *anthropic.Client, batch []analyze.Missing, opts translate.Options) []translate.Result {
+// runTranslations executes the worker pool with live per-item output. optsFor
+// yields the translation options for a catalog path, so each item is prompted
+// with the config effective at its own catalog.
+func runTranslations(ctx context.Context, client *anthropic.Client, batch []analyze.Missing, optsFor func(path string) translate.Options) []translate.Result {
 	done := 0
 	total := len(batch)
 	counterWidth := len(fmt.Sprint(total))
@@ -180,7 +187,7 @@ func runTranslations(ctx context.Context, client *anthropic.Client, batch []anal
 	langWidth := ui.MaxLangWidth(langs)
 
 	return translate.Run(ctx, batch, 4, func(ctx context.Context, m analyze.Missing) (string, error) {
-		raw, err := client.Complete(ctx, translate.BuildPrompt(m, opts))
+		raw, err := client.Complete(ctx, translate.BuildPrompt(m, optsFor(m.FilePath)))
 		if err != nil {
 			return "", err
 		}
@@ -210,7 +217,7 @@ func runTranslations(ctx context.Context, client *anthropic.Client, batch []anal
 }
 
 // retryFailures offers one interactive retry round for failed translations.
-func retryFailures(results []translate.Result, client *anthropic.Client, opts translate.Options) []translate.Result {
+func retryFailures(results []translate.Result, client *anthropic.Client, optsFor func(path string) translate.Options) []translate.Result {
 	var failedIdx []int
 	for i, r := range results {
 		if r.Err != nil && r.Err != context.Canceled {
@@ -236,7 +243,7 @@ func retryFailures(results []translate.Result, client *anthropic.Client, opts tr
 		toRetry = append(toRetry, results[i].Missing)
 	}
 
-	retried := runTranslations(context.Background(), client, toRetry, opts)
+	retried := runTranslations(context.Background(), client, toRetry, optsFor)
 	for n, i := range failedIdx {
 		results[i] = retried[n]
 	}
@@ -263,12 +270,13 @@ func printRunSummary(ok, failed []translate.Result) {
 	}
 }
 
-func printViolationWarnings(ok []translate.Result, untranslatable []string) {
-	if len(untranslatable) == 0 {
-		return
-	}
+func printViolationWarnings(ok []translate.Result, pc *projectContext) {
 	violations := map[string][]string{} // word -> keys
 	for _, r := range ok {
+		untranslatable := pc.configFor(r.Missing.FilePath).UntranslatableWords
+		if len(untranslatable) == 0 {
+			continue
+		}
 		for _, word := range analyze.CheckUntranslatableWords(r.Missing.SourceText, r.Translation, untranslatable) {
 			violations[word] = append(violations[word], r.Missing.Key)
 		}

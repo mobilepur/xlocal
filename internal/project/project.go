@@ -27,7 +27,10 @@ type Config struct {
 	CustomPrompt        string   `json:"customPrompt,omitempty"`
 }
 
-func LoadConfig(path string) (*Config, error) {
+// LoadConfigRaw reads a config without requiring any field to be set. Nested
+// configs are allowed to be partial: they inherit everything they don't set
+// from the configs above them (see ConfigResolver).
+func LoadConfigRaw(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -37,11 +40,75 @@ func LoadConfig(path string) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("%s: invalid config: %w", path, err)
 	}
+	return &cfg, nil
+}
+
+// LoadConfig reads a config that must stand on its own — targetLanguages is
+// required. Use LoadConfigRaw for nested configs that inherit their fields.
+func LoadConfig(path string) (*Config, error) {
+	cfg, err := LoadConfigRaw(path)
+	if err != nil {
+		return nil, err
+	}
 	if len(cfg.TargetLanguages) == 0 {
 		return nil, fmt.Errorf("%s: targetLanguages must not be empty", path)
 	}
+	return cfg, nil
+}
 
-	return &cfg, nil
+// clone returns a shallow copy of a config. Fields are only ever reassigned
+// (never mutated in place), so sharing slice backing arrays is safe.
+func (c *Config) clone() *Config {
+	cp := *c
+	return &cp
+}
+
+// Merge layers override on top of base and returns the effective config.
+//
+// Most fields override when the child sets them (a nil slice or empty string
+// means "not set, inherit"). untranslatableWords and excludeKeys accumulate as
+// a deduplicated union so global brand names keep applying while a subfolder
+// adds its own. Model is intentionally NOT taken from override — it stays
+// global (the root value), so a whole run uses a single model and client.
+func Merge(base, override *Config) *Config {
+	out := base.clone()
+	if override.TargetLanguages != nil {
+		out.TargetLanguages = override.TargetLanguages
+	}
+	if override.BaseLanguages != nil {
+		out.BaseLanguages = override.BaseLanguages
+	}
+	if override.FormalLanguages != nil {
+		out.FormalLanguages = override.FormalLanguages
+	}
+	if override.CustomPrompt != "" {
+		out.CustomPrompt = override.CustomPrompt
+	}
+	out.UntranslatableWords = unionStrings(base.UntranslatableWords, override.UntranslatableWords)
+	out.ExcludeKeys = unionStrings(base.ExcludeKeys, override.ExcludeKeys)
+	return out
+}
+
+// unionStrings concatenates a and b, preserving order and dropping duplicates.
+func unionStrings(a, b []string) []string {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for _, s := range b {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (c *Config) Save(path string) error {
@@ -67,6 +134,159 @@ func FindConfigUpwards(startDir string) (string, bool) {
 		}
 		dir = parent
 	}
+}
+
+// FindTopmostConfig walks from startDir towards the filesystem root and
+// returns the path of the highest ancestor config it finds — the one closest
+// to the root. That directory anchors the project, so nested configs below it
+// refine it consistently no matter which subfolder xlocal is invoked from.
+func FindTopmostConfig(startDir string) (string, bool) {
+	dir := startDir
+	topmost := ""
+	for {
+		candidate := filepath.Join(dir, ConfigFileName)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			topmost = candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	if topmost == "" {
+		return "", false
+	}
+	return topmost, true
+}
+
+// DiscoverConfigs reads every xlocal-config.json at or below root, keyed by the
+// directory that contains it. Configs are loaded leniently (LoadConfigRaw) so
+// nested ones may be partial. The user's own exclude list is deliberately not
+// applied here — configs must be found before their exclude can take effect.
+func DiscoverConfigs(root string) (map[string]*Config, error) {
+	configs := map[string]*Config{}
+
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil || rel == "." {
+				return nil
+			}
+			if skipDirs[name] || strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			if strings.HasSuffix(name, ".xcodeproj") || strings.HasSuffix(name, ".xcworkspace") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() == ConfigFileName {
+			cfg, err := LoadConfigRaw(path)
+			if err != nil {
+				return err
+			}
+			configs[filepath.Dir(path)] = cfg
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return configs, nil
+}
+
+// ConfigResolver computes the effective config for any directory in a project
+// by merging the chain of configs from the project root down to that directory.
+type ConfigResolver struct {
+	root    string
+	configs map[string]*Config // directory -> raw config
+	cache   map[string]*Config // directory -> resolved config
+}
+
+// NewConfigResolver discovers all configs at or below root and prepares the
+// resolver. root is expected to contain a config (it anchors the project); an
+// empty base is substituted otherwise so resolution never panics.
+func NewConfigResolver(root string) (*ConfigResolver, error) {
+	configs, err := DiscoverConfigs(root)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := configs[root]; !ok {
+		configs[root] = &Config{}
+	}
+	return &ConfigResolver{root: root, configs: configs, cache: map[string]*Config{}}, nil
+}
+
+// Resolve returns the effective config for dir: the root config with every
+// nested config between root and dir layered on top (shallow to deep).
+func (r *ConfigResolver) Resolve(dir string) *Config {
+	if c, ok := r.cache[dir]; ok {
+		return c
+	}
+
+	// Collect the config-bearing directories from dir up to root (deep first).
+	var chain []string
+	d := dir
+	for {
+		if _, ok := r.configs[d]; ok {
+			chain = append(chain, d)
+		}
+		if d == r.root {
+			break
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			break
+		}
+		d = parent
+	}
+
+	result := r.configs[r.root].clone()
+	// Apply from shallow (just below root) to deep, skipping root itself.
+	for i := len(chain) - 1; i >= 0; i-- {
+		if chain[i] == r.root {
+			continue
+		}
+		result = Merge(result, r.configs[chain[i]])
+	}
+
+	r.cache[dir] = result
+	return result
+}
+
+// Root returns the effective config at the project root — used for settings
+// that stay global for a run (model, base-language batch).
+func (r *ConfigResolver) Root() *Config {
+	return r.Resolve(r.root)
+}
+
+// FindCatalogs discovers catalogs like the package-level function, but honours
+// each config's exclude within the subtree that declares it: an exclude entry
+// in a subfolder's config only skips directories below that subfolder.
+func (r *ConfigResolver) FindCatalogs() ([]string, error) {
+	return findCatalogs(r.root, func(pathAbs, name, _ string) bool {
+		for dir, cfg := range r.configs {
+			if len(cfg.Exclude) == 0 {
+				continue
+			}
+			if pathAbs != dir && !strings.HasPrefix(pathAbs, dir+string(filepath.Separator)) {
+				continue // rule only applies inside the declaring subtree
+			}
+			sub, err := filepath.Rel(dir, pathAbs)
+			if err != nil {
+				continue
+			}
+			if isExcluded(sub, name, cfg.Exclude) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // skipDirs are directory names that never contain user-facing catalogs and
@@ -167,6 +387,16 @@ func markCandidate(byDir map[string]*Candidate, dir, kind string, hasConfig bool
 // Default build/dependency directories are always skipped; exclude adds
 // project-specific directory names or root-relative paths.
 func FindCatalogs(root string, exclude []string) ([]string, error) {
+	return findCatalogs(root, func(_, name, rel string) bool {
+		return isExcluded(rel, name, exclude)
+	})
+}
+
+// findCatalogs walks root for .xcstrings files, always skipping the default
+// build/dependency directories and .xcodeproj/.xcworkspace bundles. skipExtra,
+// if non-nil, decides additional directories to skip; it receives the absolute
+// path, the base name, and the root-relative path of each directory.
+func findCatalogs(root string, skipExtra func(pathAbs, name, rel string) bool) ([]string, error) {
 	var catalogs []string
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -181,10 +411,13 @@ func FindCatalogs(root string, exclude []string) ([]string, error) {
 
 		if d.IsDir() {
 			name := d.Name()
-			if skipDirs[name] || strings.HasPrefix(name, ".") || isExcluded(rel, name, exclude) {
+			if skipDirs[name] || strings.HasPrefix(name, ".") {
 				return filepath.SkipDir
 			}
 			if strings.HasSuffix(name, ".xcodeproj") || strings.HasSuffix(name, ".xcworkspace") {
+				return filepath.SkipDir
+			}
+			if skipExtra != nil && skipExtra(path, name, rel) {
 				return filepath.SkipDir
 			}
 			return nil

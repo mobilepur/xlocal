@@ -28,13 +28,22 @@ var initCmd = &cobra.Command{
 			return err
 		}
 
-		if existing, ok := project.FindConfigUpwards(cwd); ok {
-			return fmt.Errorf("there is already a config at %s — edit it with: xlocal config", existing)
-		}
-
 		dir, err := resolveInitDir(cwd)
 		if err != nil {
 			return err
+		}
+
+		// Only block if a config already lives in the target folder itself. A
+		// config in an ancestor is fine: this becomes a nested config that
+		// inherits from it and overrides only the fields it sets.
+		configPath := filepath.Join(dir, project.ConfigFileName)
+		if _, err := os.Stat(configPath); err == nil {
+			return fmt.Errorf("there is already a config at %s — edit it with: xlocal config", configPath)
+		}
+		if parent := filepath.Dir(dir); parent != dir {
+			if ancestor, ok := project.FindConfigUpwards(parent); ok {
+				fmt.Println(ui.Dim.Render(fmt.Sprintf("Note: %s already exists above — this nested config inherits from it and only overrides the fields you set.", ancestor)))
+			}
 		}
 
 		if _, err := createConfigSkeleton(dir); err != nil {

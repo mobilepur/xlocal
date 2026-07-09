@@ -22,8 +22,25 @@ import (
 
 // projectContext is the resolved project a command operates on.
 type projectContext struct {
-	Root   string
-	Config *project.Config
+	Root     string
+	Config   *project.Config // effective config at the root (model, base-language batch)
+	Resolver *project.ConfigResolver
+}
+
+// newProjectContext builds the context for a project rooted at root, preparing
+// the resolver that merges nested configs on top of the root config.
+func newProjectContext(root string) (*projectContext, error) {
+	resolver, err := project.NewConfigResolver(root)
+	if err != nil {
+		return nil, err
+	}
+	return &projectContext{Root: root, Config: resolver.Root(), Resolver: resolver}, nil
+}
+
+// configFor returns the effective config for a catalog: the root config with
+// every nested config down to the catalog's directory merged on top.
+func (pc *projectContext) configFor(catalogPath string) *project.Config {
+	return pc.Resolver.Resolve(filepath.Dir(catalogPath))
 }
 
 // resolveProject finds the project to work on: first by searching for an
@@ -35,12 +52,10 @@ func resolveProject() (*projectContext, error) {
 		return nil, err
 	}
 
-	if cfgPath, ok := project.FindConfigUpwards(cwd); ok {
-		cfg, err := project.LoadConfig(cfgPath)
-		if err != nil {
-			return nil, err
-		}
-		return &projectContext{Root: filepath.Dir(cfgPath), Config: cfg}, nil
+	// Anchor at the topmost config so nested configs below it are applied
+	// consistently, no matter which subfolder xlocal is invoked from.
+	if cfgPath, ok := project.FindTopmostConfig(cwd); ok {
+		return newProjectContext(filepath.Dir(cfgPath))
 	}
 
 	candidates, err := project.DiscoverProjects(cwd, 4)
@@ -81,11 +96,7 @@ func resolveProject() (*projectContext, error) {
 
 	chosen := candidates[picked]
 	if chosen.HasConfig {
-		cfg, err := project.LoadConfig(filepath.Join(chosen.Dir, project.ConfigFileName))
-		if err != nil {
-			return nil, err
-		}
-		return &projectContext{Root: chosen.Dir, Config: cfg}, nil
+		return newProjectContext(chosen.Dir)
 	}
 
 	var createNow bool
@@ -109,7 +120,7 @@ func resolveProject() (*projectContext, error) {
 		return nil, fmt.Errorf("fill in targetLanguages in %s (xlocal config), then run xlocal again",
 			filepath.Join(chosen.Dir, project.ConfigFileName))
 	}
-	return &projectContext{Root: chosen.Dir, Config: cfg}, nil
+	return newProjectContext(chosen.Dir)
 }
 
 // resolveAPIKey returns the API key secret to use: the --key override, the
@@ -220,7 +231,7 @@ func resolveModel(ctx context.Context, apiKey string, cfg *project.Config, s *se
 // analyzeProject loads and analyzes all catalogs of the project, sorted by
 // missing translations (most first), then by path.
 func analyzeProject(pc *projectContext) ([]*analyze.Report, error) {
-	catalogs, err := project.FindCatalogs(pc.Root, pc.Config.Exclude)
+	catalogs, err := pc.Resolver.FindCatalogs()
 	if err != nil {
 		return nil, err
 	}
@@ -230,12 +241,17 @@ func analyzeProject(pc *projectContext) ([]*analyze.Report, error) {
 
 	var reports []*analyze.Report
 	for _, path := range catalogs {
+		cfg := pc.configFor(path)
+		if len(cfg.TargetLanguages) == 0 {
+			return nil, fmt.Errorf("no targetLanguages in effect for %s — set it in %s",
+				displayPath(pc.Root, path), filepath.Join(pc.Root, project.ConfigFileName))
+		}
 		catalog, err := xcstrings.Load(path)
 		if err != nil {
 			fmt.Println(ui.Warn.Render(fmt.Sprintf("⚠ skipping %s: %v", displayPath(pc.Root, path), err)))
 			continue
 		}
-		reports = append(reports, analyze.File(path, catalog, pc.Config.TargetLanguages, pc.Config.ExcludeKeys))
+		reports = append(reports, analyze.File(path, catalog, cfg.TargetLanguages, cfg.ExcludeKeys))
 	}
 
 	sort.SliceStable(reports, func(i, j int) bool {
