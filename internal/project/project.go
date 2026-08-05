@@ -16,7 +16,15 @@ import (
 // Xcode project's repository. It never contains secrets.
 const ConfigFileName = "xlocal-config.json"
 
+type Strategy string
+
+const (
+	StrategyMerge    Strategy = "merge"
+	StrategyOverride Strategy = "override"
+)
+
 type Config struct {
+	Strategy            Strategy `json:"strategy,omitempty"`
 	TargetLanguages     []string `json:"targetLanguages"`
 	BaseLanguages       []string `json:"baseLanguages,omitempty"`
 	UntranslatableWords []string `json:"untranslatableWords,omitempty"`
@@ -39,6 +47,12 @@ func LoadConfigRaw(path string) (*Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("%s: invalid config: %w", path, err)
+	}
+	if cfg.Strategy != "" && cfg.Strategy != StrategyMerge && cfg.Strategy != StrategyOverride {
+		return nil, fmt.Errorf("%s: strategy must be %q or %q, got %q", path, StrategyMerge, StrategyOverride, cfg.Strategy)
+	}
+	if cfg.Strategy == StrategyOverride && len(cfg.TargetLanguages) == 0 {
+		return nil, fmt.Errorf("%s: an override config must define targetLanguages", path)
 	}
 	return &cfg, nil
 }
@@ -68,9 +82,13 @@ func (c *Config) clone() *Config {
 // Most fields override when the child sets them (a nil slice or empty string
 // means "not set, inherit"). untranslatableWords and excludeKeys accumulate as
 // a deduplicated union so global brand names keep applying while a subfolder
-// adds its own. Model is intentionally NOT taken from override — it stays
-// global (the root value), so a whole run uses a single model and client.
+// adds its own. Model is intentionally not taken from a merge layer. It stays
+// inherited until an override config starts a fresh subtree.
 func Merge(base, override *Config) *Config {
+	if override.EffectiveStrategy() == StrategyOverride {
+		return override.clone()
+	}
+
 	out := base.clone()
 	if override.TargetLanguages != nil {
 		out.TargetLanguages = override.TargetLanguages
@@ -87,6 +105,15 @@ func Merge(base, override *Config) *Config {
 	out.UntranslatableWords = unionStrings(base.UntranslatableWords, override.UntranslatableWords)
 	out.ExcludeKeys = unionStrings(base.ExcludeKeys, override.ExcludeKeys)
 	return out
+}
+
+// EffectiveStrategy returns the configured inheritance strategy. Omitting the
+// field is equivalent to "merge" for backwards compatibility.
+func (c *Config) EffectiveStrategy() Strategy {
+	if c.Strategy == "" {
+		return StrategyMerge
+	}
+	return c.Strategy
 }
 
 // unionStrings concatenates a and b, preserving order and dropping duplicates.
@@ -137,9 +164,8 @@ func FindConfigUpwards(startDir string) (string, bool) {
 }
 
 // FindTopmostConfig walks from startDir towards the filesystem root and
-// returns the path of the highest ancestor config it finds — the one closest
-// to the root. That directory anchors the project, so nested configs below it
-// refine it consistently no matter which subfolder xlocal is invoked from.
+// returns the highest config in the active merge chain. An override config
+// stops the search because configs above it do not apply to its subtree.
 func FindTopmostConfig(startDir string) (string, bool) {
 	dir := startDir
 	topmost := ""
@@ -147,6 +173,9 @@ func FindTopmostConfig(startDir string) (string, bool) {
 		candidate := filepath.Join(dir, ConfigFileName)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			topmost = candidate
+			if cfg, loadErr := LoadConfigRaw(candidate); loadErr == nil && cfg.EffectiveStrategy() == StrategyOverride {
+				return candidate, true
+			}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -259,34 +288,84 @@ func (r *ConfigResolver) Resolve(dir string) *Config {
 	return result
 }
 
-// Root returns the effective config at the project root — used for settings
-// that stay global for a run (model, base-language batch).
+// Root returns the effective config at the project root.
 func (r *ConfigResolver) Root() *Config {
 	return r.Resolve(r.root)
 }
 
 // FindCatalogs discovers catalogs like the package-level function, but honours
-// each config's exclude within the subtree that declares it: an exclude entry
-// in a subfolder's config only skips directories below that subfolder.
+// each config's exclude within the subtree that declares it. An override config
+// starts a new inheritance boundary, so excludes above it no longer apply.
 func (r *ConfigResolver) FindCatalogs() ([]string, error) {
-	return findCatalogs(r.root, func(pathAbs, name, _ string) bool {
-		for dir, cfg := range r.configs {
-			if len(cfg.Exclude) == 0 {
-				continue
-			}
-			if pathAbs != dir && !strings.HasPrefix(pathAbs, dir+string(filepath.Separator)) {
-				continue // rule only applies inside the declaring subtree
-			}
-			sub, err := filepath.Rel(dir, pathAbs)
-			if err != nil {
-				continue
-			}
-			if isExcluded(sub, name, cfg.Exclude) {
-				return true
-			}
+	catalogs, err := findCatalogs(r.root, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	kept := catalogs[:0]
+	for _, catalog := range catalogs {
+		if !r.catalogExcluded(catalog) {
+			kept = append(kept, catalog)
 		}
+	}
+	return kept, nil
+}
+
+func (r *ConfigResolver) catalogExcluded(catalog string) bool {
+	dir := filepath.Dir(catalog)
+	chain := r.configChain(dir)
+
+	// Only configs at or below the deepest override boundary are relevant.
+	start := 0
+	for i, configDir := range chain {
+		if r.configs[configDir].EffectiveStrategy() == StrategyOverride {
+			start = i
+		}
+	}
+
+	for _, configDir := range chain[start:] {
+		cfg := r.configs[configDir]
+		if pathExcluded(configDir, dir, cfg.Exclude) {
+			return true
+		}
+	}
+	return false
+}
+
+// configChain returns config-bearing directories from root to dir.
+func (r *ConfigResolver) configChain(dir string) []string {
+	var reverse []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, ok := r.configs[d]; ok {
+			reverse = append(reverse, d)
+		}
+		if d == r.root || filepath.Dir(d) == d {
+			break
+		}
+	}
+	chain := make([]string, len(reverse))
+	for i := range reverse {
+		chain[len(reverse)-1-i] = reverse[i]
+	}
+	return chain
+}
+
+// pathExcluded checks every directory between configDir and targetDir against
+// an exclude list declared in configDir.
+func pathExcluded(configDir, targetDir string, exclude []string) bool {
+	rel, err := filepath.Rel(configDir, targetDir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 		return false
-	})
+	}
+
+	parts := strings.Split(filepath.Clean(rel), string(filepath.Separator))
+	for i, name := range parts {
+		sub := filepath.Join(parts[:i+1]...)
+		if isExcluded(sub, name, exclude) {
+			return true
+		}
+	}
+	return false
 }
 
 // skipDirs are directory names that never contain user-facing catalogs and
@@ -358,6 +437,22 @@ func DiscoverProjects(root string, maxDepth int) ([]Candidate, error) {
 		return nil, err
 	}
 
+	// A nested merge config is part of its configured ancestor project, not a
+	// second project choice. Override configs remain candidates because they can
+	// also be run as independent sub-projects.
+	for dir, candidate := range byDir {
+		if !candidate.HasConfig || !hasConfiguredAncestor(byDir, dir) {
+			continue
+		}
+		cfg, loadErr := LoadConfigRaw(filepath.Join(dir, ConfigFileName))
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		if cfg.EffectiveStrategy() == StrategyMerge {
+			delete(byDir, dir)
+		}
+	}
+
 	candidates := make([]Candidate, 0, len(byDir))
 	for _, c := range byDir {
 		candidates = append(candidates, *c)
@@ -370,6 +465,17 @@ func DiscoverProjects(root string, maxDepth int) ([]Candidate, error) {
 	})
 
 	return candidates, nil
+}
+
+func hasConfiguredAncestor(candidates map[string]*Candidate, dir string) bool {
+	for parent := filepath.Dir(dir); ; parent = filepath.Dir(parent) {
+		if candidate, ok := candidates[parent]; ok && candidate.HasConfig {
+			return true
+		}
+		if filepath.Dir(parent) == parent {
+			return false
+		}
+	}
 }
 
 func markCandidate(byDir map[string]*Candidate, dir, kind string, hasConfig bool) {

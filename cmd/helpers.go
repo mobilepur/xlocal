@@ -23,7 +23,6 @@ import (
 // projectContext is the resolved project a command operates on.
 type projectContext struct {
 	Root     string
-	Config   *project.Config // effective config at the root (model, base-language batch)
 	Resolver *project.ConfigResolver
 }
 
@@ -34,7 +33,7 @@ func newProjectContext(root string) (*projectContext, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &projectContext{Root: root, Config: resolver.Root(), Resolver: resolver}, nil
+	return &projectContext{Root: root, Resolver: resolver}, nil
 }
 
 // configFor returns the effective config for a catalog: the root config with
@@ -52,8 +51,8 @@ func resolveProject() (*projectContext, error) {
 		return nil, err
 	}
 
-	// Anchor at the topmost config so nested configs below it are applied
-	// consistently, no matter which subfolder xlocal is invoked from.
+	// Anchor at the topmost config in the active merge chain. An override config
+	// deliberately stops the upward search and becomes the subtree's root.
 	if cfgPath, ok := project.FindTopmostConfig(cwd); ok {
 		return newProjectContext(filepath.Dir(cfgPath))
 	}
@@ -200,13 +199,7 @@ func addKeyInteractive(store keychain.SecretStore, s *settings.Settings) (string
 // resolveModel picks the model (project config > global setting > sonnet)
 // and resolves aliases to concrete model IDs, cached for a day.
 func resolveModel(ctx context.Context, apiKey string, cfg *project.Config, s *settings.Settings) (string, error) {
-	alias := cfg.Model
-	if alias == "" {
-		alias = s.Model
-	}
-	if alias == "" {
-		alias = "sonnet"
-	}
+	alias := configuredModel(cfg, s)
 
 	if strings.HasPrefix(alias, "claude-") {
 		return alias, nil
@@ -226,6 +219,51 @@ func resolveModel(ctx context.Context, apiKey string, cfg *project.Config, s *se
 		return "", err
 	}
 	return id, nil
+}
+
+func configuredModel(cfg *project.Config, s *settings.Settings) string {
+	if cfg.Model != "" {
+		return cfg.Model
+	}
+	if s.Model != "" {
+		return s.Model
+	}
+	return "sonnet"
+}
+
+// resolveClients prepares the model client effective for every selected
+// catalog. Merge configs inherit the root model; an override config can start
+// a subtree with its own model.
+func resolveClients(ctx context.Context, apiKey string, batch []analyze.Missing, pc *projectContext, s *settings.Settings) (map[string]*anthropic.Client, []string, error) {
+	byPath := make(map[string]*anthropic.Client)
+	byAlias := make(map[string]*anthropic.Client)
+	seenModel := make(map[string]bool)
+	var modelIDs []string
+
+	for _, item := range batch {
+		if _, ok := byPath[item.FilePath]; ok {
+			continue
+		}
+
+		cfg := pc.configFor(item.FilePath)
+		alias := configuredModel(cfg, s)
+		client, ok := byAlias[alias]
+		if !ok {
+			modelID, err := resolveModel(ctx, apiKey, cfg, s)
+			if err != nil {
+				return nil, nil, err
+			}
+			client = anthropic.New(apiKey, modelID)
+			byAlias[alias] = client
+			if !seenModel[modelID] {
+				seenModel[modelID] = true
+				modelIDs = append(modelIDs, modelID)
+			}
+		}
+		byPath[item.FilePath] = client
+	}
+
+	return byPath, modelIDs, nil
 }
 
 // analyzeProject loads and analyzes all catalogs of the project, sorted by

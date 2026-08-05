@@ -157,22 +157,37 @@ func findProjectRootUpwards(dir string) (string, bool) {
 // configSkeleton mirrors project.Config without omitempty, so the created
 // file shows every field there is to fill in.
 type configSkeleton struct {
-	TargetLanguages     []string `json:"targetLanguages"`
-	BaseLanguages       []string `json:"baseLanguages"`
-	UntranslatableWords []string `json:"untranslatableWords"`
-	FormalLanguages     []string `json:"formalLanguages"`
-	Model               string   `json:"model"`
-	Exclude             []string `json:"exclude"`
-	ExcludeKeys         []string `json:"excludeKeys"`
+	Strategy            project.Strategy `json:"strategy"`
+	TargetLanguages     []string         `json:"targetLanguages"`
+	BaseLanguages       []string         `json:"baseLanguages"`
+	UntranslatableWords []string         `json:"untranslatableWords"`
+	FormalLanguages     []string         `json:"formalLanguages"`
+	Model               string           `json:"model"`
+	Exclude             []string         `json:"exclude"`
+	ExcludeKeys         []string         `json:"excludeKeys"`
+	CustomPrompt        string           `json:"customPrompt"`
 }
 
-// createConfigSkeleton writes an xlocal-config.json in dir with every field
-// present and empty, prefilling only the languages detected in existing
-// catalogs.
+// nestedConfigSkeleton deliberately omits empty fields so a freshly created
+// merge config inherits them instead of clearing values from its parent.
+type nestedConfigSkeleton struct {
+	Strategy        project.Strategy `json:"strategy"`
+	TargetLanguages []string         `json:"targetLanguages,omitempty"`
+	BaseLanguages   []string         `json:"baseLanguages,omitempty"`
+}
+
+// createConfigSkeleton writes an xlocal-config.json in dir. Root configs show
+// every field; nested merge configs omit empty fields so they inherit them.
+// Languages detected in existing catalogs are prefilled in either case.
 func createConfigSkeleton(dir string) (*project.Config, error) {
 	detected, sourceLangs := detectLanguages(dir)
+	nested := false
+	if parent := filepath.Dir(dir); parent != dir {
+		_, nested = project.FindConfigUpwards(parent)
+	}
 
 	skeleton := configSkeleton{
+		Strategy:            project.StrategyMerge,
 		TargetLanguages:     append([]string{}, detected...),
 		BaseLanguages:       append([]string{}, sourceLangs...),
 		UntranslatableWords: []string{},
@@ -182,7 +197,15 @@ func createConfigSkeleton(dir string) (*project.Config, error) {
 	}
 
 	path := filepath.Join(dir, project.ConfigFileName)
-	data, err := json.MarshalIndent(skeleton, "", "  ")
+	var value any = skeleton
+	if nested {
+		value = nestedConfigSkeleton{
+			Strategy:        project.StrategyMerge,
+			TargetLanguages: append([]string(nil), detected...),
+			BaseLanguages:   append([]string(nil), sourceLangs...),
+		}
+	}
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return nil, err
 	}
@@ -199,6 +222,7 @@ func createConfigSkeleton(dir string) (*project.Config, error) {
 	fmt.Println(ui.Dim.Render("Check it into your repository — it contains no secrets."))
 
 	return &project.Config{
+		Strategy:        project.StrategyMerge,
 		TargetLanguages: skeleton.TargetLanguages,
 		BaseLanguages:   skeleton.BaseLanguages,
 	}, nil

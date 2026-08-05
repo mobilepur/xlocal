@@ -53,6 +53,7 @@ You can also run `xlocal` from a parent folder — it discovers Xcode projects b
 
 ```json
 {
+  "strategy": "merge",
   "targetLanguages": ["en", "de", "es", "fr"],
   "baseLanguages": ["en"],
   "untranslatableWords": ["MyAppName"],
@@ -65,6 +66,7 @@ You can also run `xlocal` from a parent folder — it discovers Xcode projects b
 
 | Field | Meaning |
 | --- | --- |
+| `strategy` | `merge` (default) inherits and refines parent fields; `override` uses only this config for its subtree |
 | `targetLanguages` | Languages xlocal keeps complete (required) |
 | `baseLanguages` | Languages offered as a "base languages only" batch — typically your source language(s) |
 | `untranslatableWords` | Brand/product names that must stay exactly as written |
@@ -78,14 +80,15 @@ You can also run `xlocal` from a parent folder — it discovers Xcode projects b
 
 ### Nested configuration (per folder)
 
-Like Git, xlocal supports a config in **any** folder. For each catalog, the **effective** config is the root config with every nested config down to the catalog's folder merged on top — so a target (app, widget extension, framework) can refine the defaults without repeating them.
+Like Git, xlocal supports a config in **any** folder. The top-level `strategy` field controls how a nested config relates to the configs above it:
 
-- **Most fields override when set.** A nested config that sets `targetLanguages`, `baseLanguages`, `formalLanguages` or `customPrompt` replaces the inherited value for its subtree; anything it leaves out is inherited. Nested configs may therefore be partial — only `targetLanguages` needs to be in effect *somewhere* above each catalog.
+- **`merge` is the default.** The root config and every nested merge config down to a catalog's folder are layered together. A nested config may be partial: fields it leaves out are inherited, while `targetLanguages`, `baseLanguages`, `formalLanguages` and `customPrompt` replace the inherited field when set.
+- **`override` starts fresh.** Configs above it are ignored for its entire subtree. The override config must therefore provide its own `targetLanguages`; it may also select its own model.
 - **`untranslatableWords` and `excludeKeys` accumulate.** A subfolder adds its own brand names / excluded keys on top of the inherited ones (deduplicated union).
-- **`model` stays global.** It's read only from the root config (or the global setting); `model` in a nested config is ignored, so a whole run uses one model.
+- **`model` stays inherited while merging.** A nested merge config cannot switch models; an override config can.
 - **`exclude` is scoped.** An `exclude` entry only skips directories within the subtree of the config that declares it.
 
-The project root is anchored at the **topmost** config in the folder chain, so inheritance behaves the same no matter which subfolder you run `xlocal` from. Create a nested config with `xlocal init` inside a subfolder — it detects the config above and creates a partial one that inherits from it.
+The project root is anchored at the **topmost config in the active merge chain**; an `override` config becomes the root when running inside its subtree. Create a nested config with `xlocal init` inside a subfolder — it detects the config above and creates a partial merge config that inherits from it.
 
 ## Conventions
 

@@ -40,7 +40,10 @@ global settings (model, default key).`,
 			return fmt.Errorf("editor %s: %w", editor[0], err)
 		}
 
-		if _, err := project.LoadConfig(cfgPath); err != nil {
+		// A nested merge config may be partial; its missing fields are supplied
+		// by configs above it. Runtime validation checks the effective config for
+		// each catalog.
+		if _, err := project.LoadConfigRaw(cfgPath); err != nil {
 			return fmt.Errorf("saved, but the config has a problem: %w", err)
 		}
 		fmt.Printf("%s Config is valid.\n", ui.Success.Render("✓"))

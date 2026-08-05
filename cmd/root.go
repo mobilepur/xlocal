@@ -98,7 +98,9 @@ func runTranslateFlow() error {
 	}
 
 	// Narrow down to a batch.
-	batch, err := selectBatch(selected, pc.Config.BaseLanguages)
+	batch, err := selectBatch(selected, func(path string) []string {
+		return pc.configFor(path).BaseLanguages
+	})
 	if err != nil {
 		return err
 	}
@@ -116,19 +118,21 @@ func runTranslateFlow() error {
 	if err != nil {
 		return err
 	}
-	modelID, err := resolveModel(context.Background(), apiKey, pc.Config, globalSettings)
+	clients, modelIDs, err := resolveClients(context.Background(), apiKey, batch, pc, globalSettings)
 	if err != nil {
 		return err
 	}
 
 	fmt.Printf("\n%s %d translations in %d keys · model %s\n",
-		ui.Title.Render("Translating"), len(batch), len(uniqueKeys(batch)), ui.Accent.Render(modelID))
+		ui.Title.Render("Translating"), len(batch), len(uniqueKeys(batch)), ui.Accent.Render(strings.Join(modelIDs, ", ")))
 	fmt.Println(ui.Dim.Render("Press Ctrl+C to stop — finished translations can still be saved."))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	client := anthropic.New(apiKey, modelID)
+	clientFor := func(path string) *anthropic.Client {
+		return clients[path]
+	}
 	// Options are resolved per catalog: untranslatable words, formality and a
 	// custom prompt can each differ between nested configs.
 	optsFor := func(path string) translate.Options {
@@ -140,11 +144,11 @@ func runTranslateFlow() error {
 		}
 	}
 
-	results := runTranslations(ctx, client, batch, optsFor)
+	results := runTranslations(ctx, clientFor, batch, optsFor)
 	stop()
 
 	// Offer a retry round for failures (skipping cancelled items).
-	results = retryFailures(results, client, optsFor)
+	results = retryFailures(results, clientFor, optsFor)
 
 	ok, failed := splitResults(results)
 	printRunSummary(ok, failed)
@@ -175,7 +179,7 @@ func runTranslateFlow() error {
 // runTranslations executes the worker pool with live per-item output. optsFor
 // yields the translation options for a catalog path, so each item is prompted
 // with the config effective at its own catalog.
-func runTranslations(ctx context.Context, client *anthropic.Client, batch []analyze.Missing, optsFor func(path string) translate.Options) []translate.Result {
+func runTranslations(ctx context.Context, clientFor func(path string) *anthropic.Client, batch []analyze.Missing, optsFor func(path string) translate.Options) []translate.Result {
 	done := 0
 	total := len(batch)
 	counterWidth := len(fmt.Sprint(total))
@@ -187,7 +191,7 @@ func runTranslations(ctx context.Context, client *anthropic.Client, batch []anal
 	langWidth := ui.MaxLangWidth(langs)
 
 	return translate.Run(ctx, batch, 4, func(ctx context.Context, m analyze.Missing) (string, error) {
-		raw, err := client.Complete(ctx, translate.BuildPrompt(m, optsFor(m.FilePath)))
+		raw, err := clientFor(m.FilePath).Complete(ctx, translate.BuildPrompt(m, optsFor(m.FilePath)))
 		if err != nil {
 			return "", err
 		}
@@ -217,7 +221,7 @@ func runTranslations(ctx context.Context, client *anthropic.Client, batch []anal
 }
 
 // retryFailures offers one interactive retry round for failed translations.
-func retryFailures(results []translate.Result, client *anthropic.Client, optsFor func(path string) translate.Options) []translate.Result {
+func retryFailures(results []translate.Result, clientFor func(path string) *anthropic.Client, optsFor func(path string) translate.Options) []translate.Result {
 	var failedIdx []int
 	for i, r := range results {
 		if r.Err != nil && r.Err != context.Canceled {
@@ -243,7 +247,7 @@ func retryFailures(results []translate.Result, client *anthropic.Client, optsFor
 		toRetry = append(toRetry, results[i].Missing)
 	}
 
-	retried := runTranslations(context.Background(), client, toRetry, optsFor)
+	retried := runTranslations(context.Background(), clientFor, toRetry, optsFor)
 	for n, i := range failedIdx {
 		results[i] = retried[n]
 	}
@@ -391,8 +395,18 @@ func selectMissing(reports []*analyze.Report, root string) ([]analyze.Missing, e
 }
 
 // selectBatch narrows the selection to a manageable batch of keys.
-func selectBatch(selected []analyze.Missing, baseLanguages []string) ([]analyze.Missing, error) {
+func selectBatch(selected []analyze.Missing, baseLanguagesFor func(path string) []string) ([]analyze.Missing, error) {
 	keys := uniqueKeys(selected)
+	var baseLanguages []string
+	seenBaseLanguages := map[string]bool{}
+	for _, m := range selected {
+		for _, lang := range baseLanguagesFor(m.FilePath) {
+			if !seenBaseLanguages[lang] {
+				seenBaseLanguages[lang] = true
+				baseLanguages = append(baseLanguages, lang)
+			}
+		}
+	}
 
 	type batchChoice struct {
 		limit    int // 0 = all
@@ -431,7 +445,7 @@ func selectBatch(selected []analyze.Missing, baseLanguages []string) ([]analyze.
 	if choice.baseOnly {
 		var filtered []analyze.Missing
 		for _, m := range selected {
-			for _, lang := range baseLanguages {
+			for _, lang := range baseLanguagesFor(m.FilePath) {
 				if m.TargetLanguage == lang {
 					filtered = append(filtered, m)
 					break

@@ -83,6 +83,29 @@ func TestLoadConfigInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestLoadConfigStrategy(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, `{"targetLanguages":["en"],"strategy":"invalid"}`)
+
+	if _, err := LoadConfigRaw(filepath.Join(dir, ConfigFileName)); err == nil {
+		t.Error("expected error for invalid strategy")
+	}
+
+	writeConfig(t, dir, `{"strategy":"override"}`)
+	if _, err := LoadConfigRaw(filepath.Join(dir, ConfigFileName)); err == nil {
+		t.Error("expected error when override has no targetLanguages")
+	}
+
+	writeConfig(t, dir, `{"targetLanguages":["en"]}`)
+	cfg, err := LoadConfigRaw(filepath.Join(dir, ConfigFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EffectiveStrategy() != StrategyMerge {
+		t.Errorf("default strategy = %q, want %q", cfg.EffectiveStrategy(), StrategyMerge)
+	}
+}
+
 func TestConfigSaveRoundTrip(t *testing.T) {
 	cfg := &Config{
 		TargetLanguages: []string{"en", "de"},
@@ -148,6 +171,21 @@ func TestFindTopmostConfig(t *testing.T) {
 	}
 }
 
+func TestFindTopmostConfigStopsAtOverride(t *testing.T) {
+	root := t.TempDir()
+	writeConfig(t, root, validConfig)
+	overrideDir := filepath.Join(root, "Standalone")
+	writeConfig(t, overrideDir, `{"strategy":"override","targetLanguages":["ja"]}`)
+	writeConfig(t, filepath.Join(overrideDir, "Feature"), `{"formalLanguages":["ja"]}`)
+	nested := filepath.Join(overrideDir, "Feature", "Sources")
+	mkdir(t, nested)
+
+	found, ok := FindTopmostConfig(nested)
+	if !ok || found != filepath.Join(overrideDir, ConfigFileName) {
+		t.Errorf("found %q, %v; want override config", found, ok)
+	}
+}
+
 func TestMerge(t *testing.T) {
 	base := &Config{
 		TargetLanguages:     []string{"en", "de", "fr"},
@@ -162,7 +200,7 @@ func TestMerge(t *testing.T) {
 		TargetLanguages:     []string{"en", "de"}, // overrides
 		UntranslatableWords: []string{"Widget"},   // union
 		ExcludeKeys:         []string{"b"},        // union
-		Model:               "haiku",              // ignored — model stays global
+		Model:               "haiku",              // ignored — model stays inherited
 	}
 
 	got := Merge(base, override)
@@ -189,6 +227,34 @@ func TestMerge(t *testing.T) {
 	// The base must not be mutated.
 	if !reflect.DeepEqual(base.UntranslatableWords, []string{"Brand"}) {
 		t.Errorf("base was mutated: %v", base.UntranslatableWords)
+	}
+}
+
+func TestMergeOverrideReplacesParent(t *testing.T) {
+	base := &Config{
+		TargetLanguages:     []string{"en", "de"},
+		BaseLanguages:       []string{"en"},
+		UntranslatableWords: []string{"ParentBrand"},
+		FormalLanguages:     []string{"de"},
+		Model:               "opus",
+		ExcludeKeys:         []string{"parent.key"},
+		CustomPrompt:        "parent prompt",
+	}
+	override := &Config{
+		Strategy:        StrategyOverride,
+		TargetLanguages: []string{"ja"},
+		Model:           "haiku",
+	}
+
+	got := Merge(base, override)
+	if !reflect.DeepEqual(got.TargetLanguages, []string{"ja"}) {
+		t.Errorf("TargetLanguages = %v", got.TargetLanguages)
+	}
+	if got.Model != "haiku" {
+		t.Errorf("Model = %q, want override model", got.Model)
+	}
+	if got.BaseLanguages != nil || got.UntranslatableWords != nil || got.FormalLanguages != nil || got.ExcludeKeys != nil || got.CustomPrompt != "" {
+		t.Errorf("override inherited parent fields: %+v", got)
 	}
 }
 
@@ -233,6 +299,39 @@ func TestConfigResolver(t *testing.T) {
 	}
 }
 
+func TestConfigResolverOverrideStartsNewConfig(t *testing.T) {
+	root := t.TempDir()
+	writeConfig(t, root, `{
+	  "targetLanguages": ["en", "de"],
+	  "untranslatableWords": ["RootBrand"],
+	  "model": "opus"
+	}`)
+	writeConfig(t, filepath.Join(root, "Standalone"), `{
+	  "strategy": "override",
+	  "targetLanguages": ["ja"],
+	  "untranslatableWords": ["SubBrand"],
+	  "model": "haiku"
+	}`)
+	writeConfig(t, filepath.Join(root, "Standalone", "Feature"), `{
+	  "untranslatableWords": ["FeatureBrand"]
+	}`)
+
+	r, err := NewConfigResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := r.Resolve(filepath.Join(root, "Standalone", "Feature"))
+	if !reflect.DeepEqual(cfg.TargetLanguages, []string{"ja"}) {
+		t.Errorf("TargetLanguages = %v", cfg.TargetLanguages)
+	}
+	if !reflect.DeepEqual(cfg.UntranslatableWords, []string{"SubBrand", "FeatureBrand"}) {
+		t.Errorf("UntranslatableWords = %v", cfg.UntranslatableWords)
+	}
+	if cfg.Model != "haiku" {
+		t.Errorf("Model = %q", cfg.Model)
+	}
+}
+
 func TestConfigResolverFindCatalogsScopedExclude(t *testing.T) {
 	root := t.TempDir()
 	writeConfig(t, root, `{"targetLanguages": ["en"]}`)
@@ -262,6 +361,25 @@ func TestConfigResolverFindCatalogsScopedExclude(t *testing.T) {
 	}
 	if !reflect.DeepEqual(rel, want) {
 		t.Errorf("catalogs = %v, want %v", rel, want)
+	}
+}
+
+func TestConfigResolverOverrideDropsParentExclude(t *testing.T) {
+	root := t.TempDir()
+	writeConfig(t, root, `{"targetLanguages":["en"],"exclude":["Standalone"]}`)
+	writeConfig(t, filepath.Join(root, "Standalone"), `{"strategy":"override","targetLanguages":["ja"]}`)
+	touch(t, filepath.Join(root, "Standalone", "Localizable.xcstrings"))
+
+	r, err := NewConfigResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogs, err := r.FindCatalogs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalogs) != 1 {
+		t.Fatalf("catalogs = %v, want standalone catalog", catalogs)
 	}
 }
 
@@ -325,6 +443,29 @@ func TestDiscoverProjectsDedupes(t *testing.T) {
 	}
 	if !candidates[0].HasConfig {
 		t.Error("candidate should be marked as having a config")
+	}
+}
+
+func TestDiscoverProjectsTreatsStrategiesAsProjectBoundaries(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "App")
+	writeConfig(t, projectDir, validConfig)
+	writeConfig(t, filepath.Join(projectDir, "MergedFeature"), `{"formalLanguages":["de"]}`)
+	standaloneDir := filepath.Join(projectDir, "Standalone")
+	writeConfig(t, standaloneDir, `{"strategy":"override","targetLanguages":["ja"]}`)
+
+	candidates, err := DiscoverProjects(root, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, candidate := range candidates {
+		rel, _ := filepath.Rel(root, candidate.Dir)
+		got = append(got, rel)
+	}
+	want := []string{"App", filepath.Join("App", "Standalone")}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("candidates = %v, want %v", got, want)
 	}
 }
 
