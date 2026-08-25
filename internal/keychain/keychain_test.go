@@ -2,20 +2,39 @@ package keychain
 
 import (
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
 )
 
+type runnerCall struct {
+	path  string
+	stdin string
+	args  []string
+}
+
 // fakeRunner records security invocations and plays back canned results.
 type fakeRunner struct {
-	calls  [][]string
+	calls  []runnerCall
 	output string
 	err    error
 }
 
-func (f *fakeRunner) run(args ...string) (string, error) {
-	f.calls = append(f.calls, args)
+func (f *fakeRunner) run(path string, stdin io.Reader, args ...string) (string, error) {
+	var input []byte
+	if stdin != nil {
+		var err error
+		input, err = io.ReadAll(stdin)
+		if err != nil {
+			return "", err
+		}
+	}
+	f.calls = append(f.calls, runnerCall{
+		path:  path,
+		stdin: string(input),
+		args:  append([]string(nil), args...),
+	})
 	return f.output, f.err
 }
 
@@ -30,9 +49,19 @@ func TestSetInvokesSecurityAddGenericPassword(t *testing.T) {
 	if len(f.calls) != 1 {
 		t.Fatalf("expected 1 security call, got %d", len(f.calls))
 	}
-	want := []string{"add-generic-password", "-a", "work", "-s", "xlocal", "-w", "sk-ant-123", "-U"}
-	if !reflect.DeepEqual(f.calls[0], want) {
-		t.Errorf("args = %v, want %v", f.calls[0], want)
+	call := f.calls[0]
+	if call.path != securityPath {
+		t.Errorf("path = %q, want %q", call.path, securityPath)
+	}
+	if call.stdin != "sk-ant-123\nsk-ant-123\n" {
+		t.Errorf("stdin = %q, want secret and confirmation on separate lines", call.stdin)
+	}
+	want := []string{"add-generic-password", "-a", "work", "-s", "xlocal", "-U", "-w"}
+	if !reflect.DeepEqual(call.args, want) {
+		t.Errorf("args = %v, want %v", call.args, want)
+	}
+	if strings.Contains(strings.Join(call.args, " "), "sk-ant-123") {
+		t.Error("secret must not be passed in process arguments")
 	}
 }
 
@@ -48,9 +77,16 @@ func TestGetReturnsTrimmedSecret(t *testing.T) {
 		t.Errorf("secret = %q", secret)
 	}
 
+	call := f.calls[0]
+	if call.path != securityPath {
+		t.Errorf("path = %q, want %q", call.path, securityPath)
+	}
+	if call.stdin != "" {
+		t.Errorf("stdin = %q, want empty", call.stdin)
+	}
 	want := []string{"find-generic-password", "-a", "work", "-s", "xlocal", "-w"}
-	if !reflect.DeepEqual(f.calls[0], want) {
-		t.Errorf("args = %v, want %v", f.calls[0], want)
+	if !reflect.DeepEqual(call.args, want) {
+		t.Errorf("args = %v, want %v", call.args, want)
 	}
 }
 
@@ -74,9 +110,27 @@ func TestDeleteInvokesSecurityDelete(t *testing.T) {
 	if err := kc.Delete("work"); err != nil {
 		t.Fatal(err)
 	}
+	call := f.calls[0]
+	if call.path != securityPath {
+		t.Errorf("path = %q, want %q", call.path, securityPath)
+	}
+	if call.stdin != "" {
+		t.Errorf("stdin = %q, want empty", call.stdin)
+	}
 	want := []string{"delete-generic-password", "-a", "work", "-s", "xlocal"}
-	if !reflect.DeepEqual(f.calls[0], want) {
-		t.Errorf("args = %v, want %v", f.calls[0], want)
+	if !reflect.DeepEqual(call.args, want) {
+		t.Errorf("args = %v, want %v", call.args, want)
+	}
+}
+
+func TestRunCommandDoesNotLeakStdinInError(t *testing.T) {
+	const secret = "sk-ant-must-not-leak"
+	_, err := runCommand("/usr/bin/false", strings.NewReader(secret), "ignored")
+	if err == nil {
+		t.Fatal("expected command error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("error leaked stdin: %v", err)
 	}
 }
 

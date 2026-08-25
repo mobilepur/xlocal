@@ -4,6 +4,7 @@ package keychain
 
 import (
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 )
@@ -19,27 +20,41 @@ type SecretStore interface {
 // Service is the keychain service name all xlocal secrets are filed under.
 const Service = "xlocal"
 
+const securityPath = "/usr/bin/security"
+
 type Keychain struct {
 	Service string
 	// runner executes the security CLI; replaced in tests.
-	runner func(args ...string) (string, error)
+	runner func(path string, stdin io.Reader, args ...string) (string, error)
 }
 
 func New() *Keychain {
-	return &Keychain{Service: Service, runner: runSecurity}
+	return &Keychain{Service: Service, runner: runCommand}
 }
 
-func runSecurity(args ...string) (string, error) {
-	out, err := exec.Command("security", args...).CombinedOutput()
+func runCommand(path string, stdin io.Reader, args ...string) (string, error) {
+	cmd := exec.Command(path, args...)
+	cmd.Stdin = stdin
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("security %s: %w", args[0], err)
+		command := path
+		if len(args) > 0 {
+			command += " " + args[0]
+		}
+		return "", fmt.Errorf("%s: %w", command, err)
 	}
 	return string(out), nil
 }
 
 // Set stores (or updates, thanks to -U) a secret under the given name.
 func (k *Keychain) Set(name, secret string) error {
-	_, err := k.runner("add-generic-password", "-a", name, "-s", k.Service, "-w", secret, "-U")
+	// With -w as the final option, security prompts for the password and its
+	// confirmation. Supplying both over stdin keeps them out of process args.
+	_, err := k.runner(
+		securityPath,
+		strings.NewReader(secret+"\n"+secret+"\n"),
+		"add-generic-password", "-a", name, "-s", k.Service, "-U", "-w",
+	)
 	if err != nil {
 		return fmt.Errorf("storing key %q in keychain: %w", name, err)
 	}
@@ -47,7 +62,7 @@ func (k *Keychain) Set(name, secret string) error {
 }
 
 func (k *Keychain) Get(name string) (string, error) {
-	out, err := k.runner("find-generic-password", "-a", name, "-s", k.Service, "-w")
+	out, err := k.runner(securityPath, nil, "find-generic-password", "-a", name, "-s", k.Service, "-w")
 	if err != nil {
 		return "", fmt.Errorf("key %q not found in keychain: %w", name, err)
 	}
@@ -55,7 +70,7 @@ func (k *Keychain) Get(name string) (string, error) {
 }
 
 func (k *Keychain) Delete(name string) error {
-	_, err := k.runner("delete-generic-password", "-a", name, "-s", k.Service)
+	_, err := k.runner(securityPath, nil, "delete-generic-password", "-a", name, "-s", k.Service)
 	if err != nil {
 		return fmt.Errorf("deleting key %q from keychain: %w", name, err)
 	}
