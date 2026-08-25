@@ -1,6 +1,6 @@
 module github.com/MobilePur/xlocal
 
-go 1.25.7
+go 1.25.14
 
 require (
 	github.com/charmbracelet/huh v1.0.0
