@@ -36,10 +36,3 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/MobilePur/xlocal
     description: Translate missing strings in Xcode String Catalogs using the Anthropic API
-    # The binaries are not notarized; drop the quarantine flag on install.
-    hooks:
-      post:
-        install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/xlocal"]
-          end
