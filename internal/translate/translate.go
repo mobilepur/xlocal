@@ -56,14 +56,24 @@ func BuildPrompt(m analyze.Missing, opts Options) string {
 	template := opts.Template
 	if template == "" {
 		template = DefaultTemplate
+		if m.Platform == analyze.PlatformAndroid {
+			template = strings.ReplaceAll(template, "iOS", "Android")
+		}
 	}
 
 	var context strings.Builder
+	if m.Platform == analyze.PlatformAndroid {
+		context.WriteString("\nPLATFORM: Android XML string resources. Return literal text; XML and Android escaping are handled by xlocal. Preserve Java Formatter placeholders, not Foundation placeholders.")
+		context.WriteString("\nSOURCE LANGUAGE: " + m.SourceLanguage)
+		if m.AndroidUnformatted {
+			context.WriteString("\nThis resource has formatted=false: percent signs are literal text, not format arguments.")
+		}
+	}
 
 	context.WriteString(fmt.Sprintf("\nLOCALIZATION KEY: %s", m.Key))
 
 	if m.IsPlural {
-		categories := xcstrings.PluralCategories(m.TargetLanguage)
+		categories, _ := PluralCategoriesFor(m)
 		placeholders := make([]string, len(categories))
 		for i, category := range categories {
 			placeholders[i] = fmt.Sprintf("%s: [%s form]", category, category)

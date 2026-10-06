@@ -1,0 +1,8 @@
+{
+  "targetLanguages": ["en", "de", "fr", "ja"],
+  "baseLanguages": ["en"],
+  "androidResources": ["app/src/main/res"],
+  "androidSourceLanguage": "en",
+  "untranslatableWords": ["xlocal"],
+  "formalLanguages": ["fr"]
+}

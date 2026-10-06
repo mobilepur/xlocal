@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/signal"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/MobilePur/xlocal/internal/analyze"
+	"github.com/MobilePur/xlocal/internal/android"
 	"github.com/MobilePur/xlocal/internal/anthropic"
 	"github.com/MobilePur/xlocal/internal/keychain"
 	"github.com/MobilePur/xlocal/internal/settings"
@@ -31,8 +33,8 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "xlocal",
-	Short: "Translate missing strings in Xcode String Catalogs using the Anthropic API",
-	Long: `xlocal scans your Xcode project for .xcstrings String Catalogs, shows which
+	Short: "Translate missing Xcode and Android strings using the Anthropic API",
+	Long: `xlocal scans .xcstrings String Catalogs and configured Android resource roots, shows which
 translations are missing, and fills the gaps using the Anthropic API.
 
 Run it from anywhere inside your project (it finds the xlocal-config.json
@@ -79,7 +81,7 @@ func runTranslateFlow() error {
 		totalMissing += len(r.Missing)
 	}
 	if totalMissing == 0 {
-		fmt.Println("\n" + ui.Success.Render("✓ All translations are complete!"))
+		fmt.Println("\n" + ui.Success.Render("✓ All supported translations are complete!"))
 		return nil
 	}
 
@@ -162,7 +164,7 @@ func runTranslateFlow() error {
 	var save bool
 	err = huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().
-			Title(fmt.Sprintf("Save %d translations to %d file(s)?", len(ok), len(filesOf(ok)))).
+			Title(fmt.Sprintf("Save %d translations for %d source file(s)?", len(ok), len(filesOf(ok)))).
 			Value(&save),
 	)).Run()
 	if err != nil {
@@ -199,10 +201,8 @@ func runTranslations(ctx context.Context, clientFor func(path string) *anthropic
 		if cleaned == "" {
 			return "", fmt.Errorf("model returned an empty translation")
 		}
-		if m.IsPlural {
-			if err := translate.ValidatePluralTranslation(cleaned, m); err != nil {
-				return "", err
-			}
+		if err := translate.ValidateTranslation(cleaned, m); err != nil {
+			return "", err
 		}
 		return cleaned, nil
 	}, func(r translate.Result) {
@@ -313,7 +313,37 @@ func filesOf(results []translate.Result) map[string][]translate.Result {
 // writeResults applies the successful translations to their catalogs, one
 // load/save per file.
 func writeResults(ok []translate.Result, root string) error {
+	for _, r := range ok {
+		if err := translate.ValidateTranslation(r.Translation, r.Missing); err != nil {
+			return err
+		}
+	}
 	byFile := filesOf(ok)
+	// Re-read Android sources before any writes: the prompt must still refer to
+	// the current source text and format, even if a file changed during the API call.
+	for path, results := range byFile {
+		if results[0].Missing.Platform != analyze.PlatformAndroid {
+			continue
+		}
+		catalog, err := android.Load(path, results[0].Missing.SourceLanguage)
+		if err != nil {
+			return err
+		}
+		entries := map[string]android.Entry{}
+		for _, entry := range catalog.Entries {
+			entries[android.ResourceID(entry.Key, entry.PluralForms != nil)] = entry
+		}
+		for _, r := range results {
+			source, exists := entries[android.ResourceID(r.Missing.Key, r.Missing.IsPlural)]
+			text := source.Text
+			if r.Missing.IsPlural {
+				text = source.PluralForms["other"]
+			}
+			if !exists || !source.Translatable || source.SkipReason != "" || text != r.Missing.SourceText || source.Formatted == r.Missing.AndroidUnformatted || !maps.Equal(source.PluralForms, r.Missing.SourcePluralForms) {
+				return fmt.Errorf("Android source changed during translation: %s %s — run xlocal again", path, r.Missing.Key)
+			}
+		}
+	}
 
 	paths := make([]string, 0, len(byFile))
 	for path := range byFile {
@@ -322,6 +352,32 @@ func writeResults(ok []translate.Result, root string) error {
 	sort.Strings(paths)
 
 	for _, path := range paths {
+		if byFile[path][0].Missing.Platform == analyze.PlatformAndroid {
+			byLanguage := map[string][]android.Translation{}
+			for _, r := range byFile[path] {
+				change := android.Translation{Key: r.Missing.Key, Text: r.Translation}
+				if r.Missing.IsPlural {
+					categories, err := translate.PluralCategoriesFor(r.Missing)
+					if err != nil {
+						return err
+					}
+					change.PluralForms = translate.ParsePluralForms(r.Translation, categories)
+				}
+				byLanguage[r.Missing.TargetLanguage] = append(byLanguage[r.Missing.TargetLanguage], change)
+			}
+			languages := make([]string, 0, len(byLanguage))
+			for lang := range byLanguage {
+				languages = append(languages, lang)
+			}
+			sort.Strings(languages)
+			for _, lang := range languages {
+				if err := android.SaveTranslations(path, lang, byLanguage[lang]); err != nil {
+					return err
+				}
+				fmt.Printf("%s Android %s · %s (%d translations)\n", ui.Success.Render("✓ saved"), lang, displayPath(root, path), len(byLanguage[lang]))
+			}
+			continue
+		}
 		catalog, err := xcstrings.Load(path)
 		if err != nil {
 			return err

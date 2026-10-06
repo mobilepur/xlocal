@@ -35,4 +35,4 @@ homebrew_casks:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/MobilePur/xlocal
-    description: Translate missing strings in Xcode String Catalogs using the Anthropic API
+    description: Translate missing strings in Xcode catalogs and Android XML using the Anthropic API
