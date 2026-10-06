@@ -200,7 +200,7 @@ func runTranslations(ctx context.Context, clientFor func(path string) *anthropic
 			return "", fmt.Errorf("model returned an empty translation")
 		}
 		if m.IsPlural {
-			if err := translate.ValidatePluralForms(cleaned, m.TargetLanguage); err != nil {
+			if err := translate.ValidatePluralTranslation(cleaned, m); err != nil {
 				return "", err
 			}
 		}

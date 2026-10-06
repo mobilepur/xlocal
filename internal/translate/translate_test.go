@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/MobilePur/xlocal/internal/analyze"
+	"github.com/MobilePur/xlocal/internal/xcstrings"
 )
 
 func baseMissing() analyze.Missing {
@@ -274,5 +275,104 @@ func TestRunStopsOnCancel(t *testing.T) {
 	last := results[len(results)-1]
 	if last.Err == nil {
 		t.Error("expected context error on unprocessed items")
+	}
+}
+
+func TestPluralPromptDoesNotInventNumberFormat(t *testing.T) {
+	for _, source := range []string{"%d files", "%u files", "%ld files", "%lu files", "%lld files", "%llu files", "%2$ld files for %1$@", "Files"} {
+		t.Run(source, func(t *testing.T) {
+			m := analyze.Missing{Key: "files", SourceText: source, TargetLanguage: "de", IsPlural: true}
+			prompt := BuildPrompt(m, Options{Template: "Translate {SOURCE_TEXT} to {TARGET_LANGUAGE}"})
+			if !strings.Contains(prompt, source) {
+				t.Errorf("source formatting missing from prompt: %s", prompt)
+			}
+			if !strings.Contains(source, "%lld") && strings.Contains(prompt, "%lld") {
+				t.Errorf("prompt introduced %%lld for source %q", source)
+			}
+			if strings.Contains(prompt, "Every form must keep") {
+				t.Error("prompt requires a visible number in every plural form")
+			}
+		})
+	}
+}
+
+func TestPluralPromptIncludesSourceVariants(t *testing.T) {
+	catalog := &xcstrings.File{SourceLanguage: "en", Strings: map[string]xcstrings.StringEntry{
+		"files": {Localizations: map[string]xcstrings.LocalizationEntry{
+			"en": {Variations: &xcstrings.PluralVariations{Plural: map[string]xcstrings.PluralCase{
+				"one":   {StringUnit: xcstrings.StringUnit{Value: "One file for %1$@"}},
+				"other": {StringUnit: xcstrings.StringUnit{Value: "%2$ld files for %1$@"}},
+			}}},
+		}},
+	}}
+	report := analyze.File("test.xcstrings", catalog, []string{"de"}, nil)
+	if len(report.Missing) != 1 {
+		t.Fatalf("expected one missing translation, got %d", len(report.Missing))
+	}
+	prompt := BuildPrompt(report.Missing[0], Options{})
+	for _, want := range []string{"One file for %1$@", "%2$ld files for %1$@"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("source plural variant %q missing from prompt", want)
+		}
+	}
+}
+
+func TestValidatePluralTranslation(t *testing.T) {
+	tests := []struct {
+		name     string
+		source   string
+		one      string
+		response string
+		lang     string
+		valid    bool
+	}{
+		{"int", "%d files", "", "one: %d Datei | other: %d Dateien", "de", true},
+		{"unsigned", "%u files", "", "one: %u Datei | other: %u Dateien", "de", true},
+		{"long", "%ld files", "", "one: %ld Datei | other: %ld Dateien", "de", true},
+		{"unsigned long", "%lu files", "", "one: %lu Datei | other: %lu Dateien", "de", true},
+		{"long long", "%lld files", "", "one: %lld Datei | other: %lld Dateien", "de", true},
+		{"unsigned long long", "%llu files", "", "one: %llu Datei | other: %llu Dateien", "de", true},
+		{"changed type", "%d files", "", "one: %lld Datei | other: %lld Dateien", "de", false},
+		{"changed signedness", "%u files", "", "one: %d Datei | other: %d Dateien", "de", false},
+		{"positional reordering", "%@ has %ld files", "", "one: %2$ld Datei für %1$@ | other: %2$ld Dateien für %1$@", "de", true},
+		{"wrong argument position", "%1$@ has %2$ld files", "", "one: %1$ld Datei für %2$@ | other: %1$ld Dateien für %2$@", "de", false},
+		{"mixed positions", "%@ has %ld files", "", "one: %2$ld Datei für %@ | other: %2$ld Dateien für %@", "de", false},
+		{"zero position", "%d files", "", "one: %0$d Datei | other: %0$d Dateien", "de", false},
+		{"source-backed omission", "%d files", "One file", "one: Eine Datei | other: %d Dateien", "de", true},
+		{"source-backed omission with name", "%2$ld files for %1$@", "One file for %1$@", "one: Eine Datei für %1$@ | other: %2$ld Dateien für %1$@", "de", true},
+		{"dropped name", "%2$ld files for %1$@", "One file for %1$@", "one: Eine Datei | other: %2$ld Dateien für %1$@", "de", false},
+		{"unbacked omission", "%d files", "", "one: Eine Datei | other: %d Dateien", "de", false},
+		{"number-free source", "Files", "File", "one: Datei | other: Dateien", "de", true},
+		{"invented number", "Files", "File", "one: %lld Datei | other: %lld Dateien", "de", false},
+		{"escaped percent", "%d files (100%% ready, %%d)", "", "one: %d Datei (100%% fertig, %%d) | other: %d Dateien (100%% fertig, %%d)", "de", true},
+		{"format width", "%03d files", "", "one: %03d Datei | other: %03d Dateien", "de", true},
+		{"changed format width", "%03d files", "", "one: %d Datei | other: %d Dateien", "de", false},
+		{"dynamic format", "%*.*f files", "", "one: %3$*1$.*2$f Datei | other: %3$*1$.*2$f Dateien", "de", true},
+		{"swapped dynamic arguments", "%3$*1$.*2$f files", "", "one: %3$*2$.*1$f Datei | other: %3$*2$.*1$f Dateien", "de", false},
+		{"repeated argument with different widths", "%1$ld (%1$04ld) files", "", "one: %1$ld (%1$04ld) Datei | other: %1$ld (%1$04ld) Dateien", "de", true},
+		{"repeated argument reordered", "%1$ld (%1$04ld) files", "", "one: %1$04ld (%1$ld) Datei | other: %1$04ld (%1$ld) Dateien", "de", true},
+		{"repeated compatible signed conversions", "%1$d / %1$i files", "", "one: %1$d / %1$i Datei | other: %1$d / %1$i Dateien", "de", true},
+		{"repeated compatible unsigned conversions", "%1$u / %1$x files", "", "one: %1$u / %1$x Datei | other: %1$u / %1$x Dateien", "de", true},
+		{"repeated compatible floating conversions", "%1$f / %1$e files", "", "one: %1$f / %1$e Datei | other: %1$f / %1$e Dateien", "de", true},
+		{"unsupported conversion despite omission", "%d files", "One file", "one: Eine Datei %n | other: %d Dateien", "de", false},
+		{"unknown conversion despite omission", "%d files", "One file", "one: Eine Datei %v | other: %d Dateien", "de", false},
+		{"incomplete length modifier despite omission", "%d files", "One file", "one: Eine Datei %l | other: %d Dateien", "de", false},
+		{"dropped repeated argument", "%1$ld (%1$ld) files", "", "one: %1$ld Datei | other: %1$ld Dateien", "de", false},
+		{"incompatible repeated argument", "%1$ld files", "", "one: %1$ld (%1$@) Datei | other: %1$ld (%1$@) Dateien", "de", false},
+		{"missing dynamic width argument", "%*d files", "", "one: %d Datei | other: %d Dateien", "de", false},
+		{"single category", "%ld files", "", "%ld個のファイル", "ja", true},
+		{"missing categories", "%d files", "", "one: %d Datei", "de", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := analyze.Missing{SourceText: tt.source, TargetLanguage: tt.lang, IsPlural: true}
+			if tt.one != "" {
+				m.SourcePluralForms = map[string]string{"one": tt.one, "other": tt.source}
+			}
+			err := ValidatePluralTranslation(tt.response, m)
+			if (err == nil) != tt.valid {
+				t.Errorf("ValidatePluralTranslation() = %v; valid = %v", err, tt.valid)
+			}
+		})
 	}
 }

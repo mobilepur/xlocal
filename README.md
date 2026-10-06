@@ -101,7 +101,7 @@ xlocal builds its translation prompts from your catalog — the quality of what 
 
 ## How translations work
 
-For every missing (key, language) pair, xlocal builds a prompt containing the source text, the localization key, the developer comment, all existing translations of that key, your untranslatable words, and formality instructions. Plural strings are translated as proper `one`/`other` variations. Four translations run in parallel; you review a summary (including brand-word warnings) before anything is written.
+For every missing (key, language) pair, xlocal builds a prompt containing the source text, the localization key, the developer comment, all existing translations of that key, your untranslatable words, and formality instructions. Plural strings use the target language’s CLDR categories, with all source plural forms supplied as context. The source format specifiers and argument positions are preserved; responses with incompatible format arguments are rejected before saving. Forms may omit the number when supported by the source variants and the target language’s grammar. Four translations run in parallel; you review a summary (including brand-word warnings) before anything is written.
 
 Files are written in the exact format Xcode's String Catalog editor produces — byte-identical round trips, minimal diffs.
 
