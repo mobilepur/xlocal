@@ -39,7 +39,7 @@ var statusCmd = &cobra.Command{
 			total += len(r.Missing)
 		}
 		if total == 0 {
-			fmt.Println("\n" + ui.Success.Render("✓ All translations are complete!"))
+			fmt.Println("\n" + ui.Success.Render("✓ All supported translations are complete!"))
 		} else {
 			fmt.Printf("\n%s\n", ui.Warn.Render(fmt.Sprintf("%d translations missing — run xlocal to translate them.", total)))
 		}
@@ -52,6 +52,7 @@ type statusJSONFile struct {
 	TotalStrings int            `json:"totalStrings"`
 	Missing      int            `json:"missing"`
 	PerLanguage  map[string]int `json:"perLanguage"`
+	Warnings     []string       `json:"warnings,omitempty"`
 }
 
 func printStatusJSON(reports []*analyze.Report, pc *projectContext) error {
@@ -66,6 +67,7 @@ func printStatusJSON(reports []*analyze.Report, pc *projectContext) error {
 			TotalStrings: r.TotalStrings,
 			Missing:      len(r.Missing),
 			PerLanguage:  perLanguage,
+			Warnings:     r.Warnings,
 		})
 	}
 

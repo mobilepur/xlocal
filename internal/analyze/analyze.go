@@ -9,14 +9,21 @@ import (
 	"github.com/MobilePur/xlocal/internal/xcstrings"
 )
 
+type Platform string
+
+const PlatformAndroid Platform = "android"
+
 // Missing describes one untranslated (key, language) pair.
 type Missing struct {
-	Key            string
-	SourceText     string
-	TargetLanguage string
-	FilePath       string
-	Comment        string
-	IsPlural       bool
+	Key                string
+	Platform           Platform
+	SourceLanguage     string
+	AndroidUnformatted bool
+	SourceText         string
+	TargetLanguage     string
+	FilePath           string
+	Comment            string
+	IsPlural           bool
 	// SourcePluralForms retains all source variants, including forms that
 	// intentionally omit the number. SourceText remains the other form.
 	SourcePluralForms map[string]string
@@ -30,6 +37,7 @@ type Report struct {
 	FilePath        string
 	TargetLanguages []string
 	TotalStrings    int
+	Warnings        []string
 	Missing         []Missing
 }
 

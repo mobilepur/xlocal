@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Existing human translation; xlocal must keep it. -->
+    <plurals name="selected_files">
+        <item quantity="one">%1$d ausgewählte Datei</item>
+    </plurals>
+    <color name="accent">#336699</color>
+</resources>

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 
+	"github.com/MobilePur/xlocal/internal/android"
 	"github.com/MobilePur/xlocal/internal/keychain"
 	"github.com/MobilePur/xlocal/internal/project"
 	"github.com/MobilePur/xlocal/internal/settings"
@@ -71,11 +72,19 @@ var initCmd = &cobra.Command{
 // user to the project root if not: catalogs below the working directory win,
 // then discovered projects below, then a project root further up.
 func resolveInitDir(cwd string) (string, error) {
+	cwd, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", err
+	}
 	catalogs, err := project.FindCatalogs(cwd, nil)
 	if err != nil {
 		return "", err
 	}
-	if len(catalogs) > 0 {
+	androidRoots, err := project.DiscoverAndroidResourceDirs(cwd)
+	if err != nil {
+		return "", err
+	}
+	if len(catalogs) > 0 || len(androidRoots) > 0 {
 		return cwd, nil
 	}
 
@@ -90,7 +99,7 @@ func resolveInitDir(cwd string) (string, error) {
 		}
 	}
 	if len(open) > 0 {
-		fmt.Println(ui.Dim.Render("No String Catalogs found in this folder, but there are projects below:"))
+		fmt.Println(ui.Dim.Render("No localization resources found in this folder, but there are projects below:"))
 		options := make([]huh.Option[int], 0, len(open))
 		for i, c := range open {
 			rel, relErr := filepath.Rel(cwd, c.Dir)
@@ -129,7 +138,7 @@ func resolveInitDir(cwd string) (string, error) {
 		return cwd, nil
 	}
 
-	return "", fmt.Errorf("this doesn't look like an Xcode project (no String Catalogs, no .xcodeproj) — cd into your project root and run xlocal init again")
+	return "", fmt.Errorf("this doesn't look like an Xcode or Android project — cd into your project root and run xlocal init again")
 }
 
 // findProjectRootUpwards walks from dir towards the filesystem root and
@@ -141,7 +150,7 @@ func findProjectRootUpwards(dir string) (string, bool) {
 		if err == nil {
 			for _, e := range entries {
 				name := e.Name()
-				if strings.HasSuffix(name, ".xcodeproj") || strings.HasSuffix(name, ".xcworkspace") || name == "Package.swift" {
+				if strings.HasSuffix(name, ".xcodeproj") || strings.HasSuffix(name, ".xcworkspace") || name == "Package.swift" || name == "settings.gradle" || name == "settings.gradle.kts" {
 					return dir, true
 				}
 			}
@@ -157,29 +166,37 @@ func findProjectRootUpwards(dir string) (string, bool) {
 // configSkeleton mirrors project.Config without omitempty, so the created
 // file shows every field there is to fill in.
 type configSkeleton struct {
-	Strategy            project.Strategy `json:"strategy"`
-	TargetLanguages     []string         `json:"targetLanguages"`
-	BaseLanguages       []string         `json:"baseLanguages"`
-	UntranslatableWords []string         `json:"untranslatableWords"`
-	FormalLanguages     []string         `json:"formalLanguages"`
-	Model               string           `json:"model"`
-	Exclude             []string         `json:"exclude"`
-	ExcludeKeys         []string         `json:"excludeKeys"`
-	CustomPrompt        string           `json:"customPrompt"`
+	Strategy              project.Strategy `json:"strategy"`
+	TargetLanguages       []string         `json:"targetLanguages"`
+	BaseLanguages         []string         `json:"baseLanguages"`
+	UntranslatableWords   []string         `json:"untranslatableWords"`
+	FormalLanguages       []string         `json:"formalLanguages"`
+	Model                 string           `json:"model"`
+	Exclude               []string         `json:"exclude"`
+	ExcludeKeys           []string         `json:"excludeKeys"`
+	CustomPrompt          string           `json:"customPrompt"`
+	AndroidResources      []string         `json:"androidResources,omitempty"`
+	AndroidSourceLanguage string           `json:"androidSourceLanguage,omitempty"`
 }
 
 // nestedConfigSkeleton deliberately omits empty fields so a freshly created
 // merge config inherits them instead of clearing values from its parent.
 type nestedConfigSkeleton struct {
-	Strategy        project.Strategy `json:"strategy"`
-	TargetLanguages []string         `json:"targetLanguages,omitempty"`
-	BaseLanguages   []string         `json:"baseLanguages,omitempty"`
+	Strategy              project.Strategy `json:"strategy"`
+	TargetLanguages       []string         `json:"targetLanguages,omitempty"`
+	BaseLanguages         []string         `json:"baseLanguages,omitempty"`
+	AndroidResources      []string         `json:"androidResources,omitempty"`
+	AndroidSourceLanguage string           `json:"androidSourceLanguage,omitempty"`
 }
 
 // createConfigSkeleton writes an xlocal-config.json in dir. Root configs show
 // every field; nested merge configs omit empty fields so they inherit them.
 // Languages detected in existing catalogs are prefilled in either case.
 func createConfigSkeleton(dir string) (*project.Config, error) {
+	androidRoots, err := project.DiscoverAndroidResourceDirs(dir)
+	if err != nil {
+		return nil, err
+	}
 	detected, sourceLangs := detectLanguages(dir)
 	nested := false
 	if parent := filepath.Dir(dir); parent != dir {
@@ -196,13 +213,19 @@ func createConfigSkeleton(dir string) (*project.Config, error) {
 		ExcludeKeys:         []string{},
 	}
 
+	skeleton.AndroidResources = androidRoots
+	if len(androidRoots) > 0 {
+		skeleton.AndroidSourceLanguage = "en"
+	}
 	path := filepath.Join(dir, project.ConfigFileName)
 	var value any = skeleton
 	if nested {
 		value = nestedConfigSkeleton{
-			Strategy:        project.StrategyMerge,
-			TargetLanguages: append([]string(nil), detected...),
-			BaseLanguages:   append([]string(nil), sourceLangs...),
+			Strategy:              project.StrategyMerge,
+			TargetLanguages:       append([]string(nil), detected...),
+			BaseLanguages:         append([]string(nil), sourceLangs...),
+			AndroidResources:      androidRoots,
+			AndroidSourceLanguage: skeleton.AndroidSourceLanguage,
 		}
 	}
 	data, err := json.MarshalIndent(value, "", "  ")
@@ -217,14 +240,16 @@ func createConfigSkeleton(dir string) (*project.Config, error) {
 	if len(detected) > 0 {
 		fmt.Println(ui.Dim.Render("Prefilled with the languages found in your catalogs: " + strings.Join(detected, ", ")))
 	} else {
-		fmt.Println(ui.Warn.Render("⚠ No catalogs with languages found — fill in targetLanguages before translating."))
+		fmt.Println(ui.Warn.Render("⚠ No resources with languages found — fill in targetLanguages before translating."))
 	}
 	fmt.Println(ui.Dim.Render("Check it into your repository — it contains no secrets."))
 
 	return &project.Config{
-		Strategy:        project.StrategyMerge,
-		TargetLanguages: skeleton.TargetLanguages,
-		BaseLanguages:   skeleton.BaseLanguages,
+		Strategy:              project.StrategyMerge,
+		TargetLanguages:       skeleton.TargetLanguages,
+		BaseLanguages:         skeleton.BaseLanguages,
+		AndroidResources:      skeleton.AndroidResources,
+		AndroidSourceLanguage: skeleton.AndroidSourceLanguage,
 	}, nil
 }
 
@@ -289,6 +314,24 @@ func detectLanguages(dir string) (all []string, sourceLangs []string) {
 		}
 	}
 
+	androidRoots, _ := project.DiscoverAndroidResourceDirs(dir)
+	for _, rel := range androidRoots {
+		paths, err := android.FindSources(filepath.Join(dir, rel))
+		if err != nil {
+			continue
+		}
+		for _, path := range paths {
+			catalog, err := android.Load(path, "en")
+			if err != nil {
+				continue
+			}
+			sourceSet["en"] = true
+			langSet["en"] = true
+			for lang := range catalog.Localizations {
+				langSet[lang] = true
+			}
+		}
+	}
 	for lang := range langSet {
 		all = append(all, lang)
 	}

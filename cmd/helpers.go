@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/huh"
 
 	"github.com/MobilePur/xlocal/internal/analyze"
+	"github.com/MobilePur/xlocal/internal/android"
 	"github.com/MobilePur/xlocal/internal/anthropic"
 	"github.com/MobilePur/xlocal/internal/keychain"
 	"github.com/MobilePur/xlocal/internal/project"
@@ -29,6 +30,10 @@ type projectContext struct {
 // newProjectContext builds the context for a project rooted at root, preparing
 // the resolver that merges nested configs on top of the root config.
 func newProjectContext(root string) (*projectContext, error) {
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
 	resolver, err := project.NewConfigResolver(root)
 	if err != nil {
 		return nil, err
@@ -62,7 +67,7 @@ func resolveProject() (*projectContext, error) {
 		return nil, err
 	}
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no %s and no Xcode project found under %s — run xlocal inside your project, or create a config with: xlocal init", project.ConfigFileName, cwd)
+		return nil, fmt.Errorf("no %s and no Xcode or Gradle project found under %s — run xlocal inside your project, or create a config with: xlocal init", project.ConfigFileName, cwd)
 	}
 
 	fmt.Println(ui.Dim.Render(fmt.Sprintf("No %s found here — discovered projects below %s:", project.ConfigFileName, cwd)))
@@ -273,8 +278,12 @@ func analyzeProject(pc *projectContext) ([]*analyze.Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(catalogs) == 0 {
-		return nil, fmt.Errorf("no .xcstrings files found under %s", pc.Root)
+	androidSources, err := pc.Resolver.FindAndroidSources()
+	if err != nil {
+		return nil, err
+	}
+	if len(catalogs) == 0 && len(androidSources) == 0 {
+		return nil, fmt.Errorf("no localization resources found under %s — Android resource roots must be listed in androidResources", pc.Root)
 	}
 
 	var reports []*analyze.Report
@@ -292,6 +301,28 @@ func analyzeProject(pc *projectContext) ([]*analyze.Report, error) {
 		reports = append(reports, analyze.File(path, catalog, cfg.TargetLanguages, cfg.ExcludeKeys))
 	}
 
+	for _, path := range androidSources {
+		cfg := pc.configFor(path)
+		if len(cfg.TargetLanguages) == 0 {
+			return nil, fmt.Errorf("no targetLanguages in effect for %s", displayPath(pc.Root, path))
+		}
+		sourceLanguage := cfg.AndroidSourceLanguage
+		if sourceLanguage == "" {
+			sourceLanguage = "en"
+		}
+		catalog, err := android.Load(path, sourceLanguage)
+		if err != nil {
+			return nil, err
+		}
+		report, err := analyze.AndroidFile(path, sourceLanguage, catalog, cfg.TargetLanguages, cfg.ExcludeKeys)
+		if err != nil {
+			return nil, err
+		}
+		reports = append(reports, report)
+		for _, warning := range report.Warnings {
+			fmt.Fprintln(os.Stderr, ui.Warn.Render("⚠ "+warning))
+		}
+	}
 	sort.SliceStable(reports, func(i, j int) bool {
 		if len(reports[i].Missing) != len(reports[j].Missing) {
 			return len(reports[i].Missing) > len(reports[j].Missing)

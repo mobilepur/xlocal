@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">xlocal</string>
+    <!-- Home-screen greeting; argument 1 is the user's name. -->
+    <string name="welcome">Hello, %1$s!</string>
+    <!-- Files selected for upload; quantity is also format argument 1. -->
+    <plurals name="selected_files">
+        <item quantity="one">%1$d selected file</item>
+        <item quantity="other">%1$d selected files</item>
+    </plurals>
+    <string name="ready" formatted="false">100% ready</string>
+    <string name="details">"  O\'Neil &amp; friends\nSay \"Hello\".  "</string>
+    <!-- Retained, reported and skipped by the prototype. -->
+    <string name="styled">A <b>bold</b> word</string>
+    <string-array name="choices">
+        <item>First</item>
+        <item>Second</item>
+    </string-array>
+</resources>

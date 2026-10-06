@@ -33,6 +33,9 @@ type Config struct {
 	Exclude             []string `json:"exclude,omitempty"`
 	ExcludeKeys         []string `json:"excludeKeys,omitempty"`
 	CustomPrompt        string   `json:"customPrompt,omitempty"`
+	// AndroidResources lists resource roots relative to the declaring config.
+	AndroidResources      []string `json:"androidResources,omitempty"`
+	AndroidSourceLanguage string   `json:"androidSourceLanguage,omitempty"`
 }
 
 // LoadConfigRaw reads a config without requiring any field to be set. Nested
@@ -98,6 +101,9 @@ func Merge(base, override *Config) *Config {
 	}
 	if override.FormalLanguages != nil {
 		out.FormalLanguages = override.FormalLanguages
+	}
+	if override.AndroidSourceLanguage != "" {
+		out.AndroidSourceLanguage = override.AndroidSourceLanguage
 	}
 	if override.CustomPrompt != "" {
 		out.CustomPrompt = override.CustomPrompt
@@ -430,6 +436,8 @@ func DiscoverProjects(root string, maxDepth int) ([]Candidate, error) {
 			markCandidate(byDir, filepath.Dir(path), "config", true)
 		case "Package.swift":
 			markCandidate(byDir, filepath.Dir(path), "package", false)
+		case "settings.gradle", "settings.gradle.kts":
+			markCandidate(byDir, filepath.Dir(path), "gradle", false)
 		}
 		return nil
 	})
