@@ -17,6 +17,9 @@ type Missing struct {
 	FilePath       string
 	Comment        string
 	IsPlural       bool
+	// SourcePluralForms retains all source variants, including forms that
+	// intentionally omit the number. SourceText remains the other form.
+	SourcePluralForms map[string]string
 	// Existing holds the actual translations in other languages, used as
 	// context for the translation prompt.
 	Existing map[string]string
@@ -84,8 +87,15 @@ func File(path string, catalog *xcstrings.File, targetLanguages []string, exclud
 		}
 
 		isPlural := false
+		var sourcePluralForms map[string]string
 		if loc, ok := entry.Localizations[catalog.SourceLanguage]; ok {
 			isPlural = loc.Variations != nil && loc.Variations.Plural != nil
+			if isPlural {
+				sourcePluralForms = make(map[string]string, len(loc.Variations.Plural))
+				for category, form := range loc.Variations.Plural {
+					sourcePluralForms[category] = form.StringUnit.Value
+				}
+			}
 		}
 
 		for _, lang := range targetLanguages {
@@ -106,13 +116,14 @@ func File(path string, catalog *xcstrings.File, targetLanguages []string, exclud
 			}
 
 			report.Missing = append(report.Missing, Missing{
-				Key:            key,
-				SourceText:     sourceText,
-				TargetLanguage: lang,
-				FilePath:       path,
-				Comment:        entry.Comment,
-				IsPlural:       isPlural,
-				Existing:       existing,
+				Key:               key,
+				SourceText:        sourceText,
+				TargetLanguage:    lang,
+				FilePath:          path,
+				Comment:           entry.Comment,
+				IsPlural:          isPlural,
+				SourcePluralForms: sourcePluralForms,
+				Existing:          existing,
 			})
 		}
 	}

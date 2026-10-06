@@ -29,7 +29,7 @@ SOURCE TEXT: "{SOURCE_TEXT}"
 
 INSTRUCTIONS:
 - Provide ONLY the translated text, no explanations or additional formatting
-- Preserve any iOS-specific formatting like %@, %d, %lld placeholders exactly as they are
+- Preserve the source format specifiers, including their types and argument positions
 - CRITICAL: Keep any untranslatable words (brand names, product terms) EXACTLY as they appear in the source
 - CAPITALIZATION: Follow the capitalization patterns of the existing translations for this key. Single words in UI contexts typically start with capital letters (e.g., "Cancel", "Save", "Delete").
 - Keep the tone appropriate for a mobile app (usually friendly and concise)
@@ -71,8 +71,19 @@ func BuildPrompt(m analyze.Missing, opts Options) string {
 		context.WriteString("\n\nPLURAL FORM REQUIRED:")
 		context.WriteString(fmt.Sprintf("\nThis is a PLURAL string. %s uses the CLDR plural categories %s — provide every one of them.", strings.ToUpper(m.TargetLanguage), strings.Join(categories, ", ")))
 		context.WriteString(fmt.Sprintf("\nFormat your response as a single line: %s", strings.Join(placeholders, " | ")))
-		context.WriteString("\nExample for Russian: one: %lld урок | few: %lld урока | many: %lld уроков | other: %lld урока")
-		context.WriteString("\nEvery form must keep %lld as the placeholder for the number — never spell the number out (categories like 'one' also cover 21, 31, … in some languages).")
+		context.WriteString("\nKeep the source number's format specifier and argument position; do not substitute a different integer type or invent a placeholder.")
+		context.WriteString("\nA form may omit the number when the source variants do so and it is valid for every number in the target category. Do not replace a variable number with a fixed numeral or a spelled-out number: categories like 'one' can also cover 21, 31, … in some languages.")
+		if len(m.SourcePluralForms) > 0 {
+			context.WriteString("\n\nSOURCE PLURAL FORMS:")
+			categories := make([]string, 0, len(m.SourcePluralForms))
+			for category := range m.SourcePluralForms {
+				categories = append(categories, category)
+			}
+			sort.Strings(categories)
+			for _, category := range categories {
+				context.WriteString(fmt.Sprintf("\n%s: %s", category, m.SourcePluralForms[category]))
+			}
+		}
 	}
 
 	if m.Comment != "" {
