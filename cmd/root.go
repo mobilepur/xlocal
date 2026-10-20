@@ -193,6 +193,9 @@ func runTranslations(ctx context.Context, clientFor func(path string) *anthropic
 	langWidth := ui.MaxLangWidth(langs)
 
 	return translate.Run(ctx, batch, 4, func(ctx context.Context, m analyze.Missing) (string, error) {
+		if !m.IsPlural && !translate.HasTranslatableText(m.SourceText) {
+			return m.SourceText, nil
+		}
 		raw, err := clientFor(m.FilePath).Complete(ctx, translate.BuildPrompt(m, optsFor(m.FilePath)))
 		if err != nil {
 			return "", err

@@ -376,3 +376,42 @@ func TestValidatePluralTranslation(t *testing.T) {
 		})
 	}
 }
+
+func TestHasTranslatableText(t *testing.T) {
+	for source, want := range map[string]bool{
+		"%@":            false,
+		"%@ → %@":       false,
+		"%1$@ – %2$lld": false,
+		"•":             false,
+		"Welcome %@!":   true,
+		"%lld words":    true,
+		"日本語":           true,
+	} {
+		if got := HasTranslatableText(source); got != want {
+			t.Errorf("HasTranslatableText(%q) = %v, want %v", source, got, want)
+		}
+	}
+}
+
+func TestValidatePlainTranslation(t *testing.T) {
+	if err := ValidatePlainTranslation("Willkommen %@!", "Welcome %@!"); err != nil {
+		t.Errorf("valid translation rejected: %v", err)
+	}
+	if err := ValidatePlainTranslation("%2$@ von %1$@", "%1$@ of %2$@"); err != nil {
+		t.Errorf("reordered positional arguments rejected: %v", err)
+	}
+	explanation := "The source text is just the placeholder \"%@\", so there is nothing to translate.\n\n%@"
+	if err := ValidatePlainTranslation(explanation, "%@"); err == nil {
+		t.Error("multi-line explanation accepted")
+	}
+	if err := ValidatePlainTranslation("Willkommen!", "Welcome %@!"); err == nil {
+		t.Error("dropped argument accepted")
+	}
+	if err := ValidatePlainTranslation("Willkommen %d!", "Welcome %@!"); err == nil {
+		t.Error("changed argument type accepted")
+	}
+	plain := analyze.Missing{SourceText: "Welcome %@!", TargetLanguage: "de"}
+	if err := ValidateTranslation("Willkommen!", plain); err == nil {
+		t.Error("ValidateTranslation does not check plain Xcode strings")
+	}
+}
