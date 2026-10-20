@@ -26,7 +26,7 @@ func ValidateTranslation(response string, m analyze.Missing) error {
 		if m.IsPlural {
 			return ValidatePluralTranslation(response, m)
 		}
-		return nil
+		return ValidatePlainTranslation(response, m.SourceText)
 	}
 	if !m.IsPlural {
 		if m.AndroidUnformatted {

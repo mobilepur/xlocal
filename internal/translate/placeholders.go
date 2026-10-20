@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/MobilePur/xlocal/internal/analyze"
 	"github.com/MobilePur/xlocal/internal/xcstrings"
@@ -154,4 +155,39 @@ func formatArguments(text string) (map[formatArgument]int, error) {
 		return nil, fmt.Errorf("cannot mix positional and sequential format arguments")
 	}
 	return args, nil
+}
+
+// ValidatePlainTranslation rejects a plain Xcode response that is not a
+// translation of the source: changed format arguments, or more lines than the
+// source has. Models sometimes answer an untranslatable source with an
+// explanation; it must not be saved as the translation.
+func ValidatePlainTranslation(response, source string) error {
+	if strings.Count(response, "\n") > strings.Count(source, "\n") {
+		return fmt.Errorf("response has more lines than the source: %q", response)
+	}
+	sourceArgs, err := formatArguments(source)
+	if err != nil {
+		return fmt.Errorf("source format: %w", err)
+	}
+	args, err := formatArguments(response)
+	if err != nil {
+		return fmt.Errorf("translation format: %w", err)
+	}
+	if !maps.Equal(args, sourceArgs) {
+		return fmt.Errorf("translation changes the source format arguments: %q", response)
+	}
+	return nil
+}
+
+// HasTranslatableText reports whether the source contains words to translate
+// once format specifiers are removed. A source of only placeholders, symbols
+// and punctuation ("%@", "%@ → %@") is copied unchanged instead.
+func HasTranslatableText(source string) bool {
+	rest := formatSpecifier.ReplaceAllString(source, "")
+	for _, r := range rest {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
 }
