@@ -3,6 +3,7 @@
   "baseLanguages": ["en"],
   "untranslatableWords": ["MyAppName", "MyFeatureBrand"],
   "formalLanguages": ["fr"],
+  "provider": "anthropic",
   "model": "sonnet",
   "exclude": ["Vendor", "Generated"],
   "excludeKeys": ["legal.disclaimer"]

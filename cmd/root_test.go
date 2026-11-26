@@ -9,6 +9,7 @@ import (
 
 	"github.com/MobilePur/xlocal/internal/analyze"
 	"github.com/MobilePur/xlocal/internal/anthropic"
+	"github.com/MobilePur/xlocal/internal/llm"
 	"github.com/MobilePur/xlocal/internal/translate"
 )
 
@@ -35,7 +36,7 @@ func TestRunTranslationsValidatesPluralPlaceholders(t *testing.T) {
 				Key: "files", SourceText: "%d files", TargetLanguage: "de", IsPlural: true,
 				SourcePluralForms: map[string]string{"one": "One file", "other": "%d files"},
 			}}
-			results := runTranslations(context.Background(), func(path string) *anthropic.Client {
+			results := runTranslations(context.Background(), func(path string) llm.Completer {
 				return client
 			}, batch, func(path string) translate.Options {
 				return translate.Options{}

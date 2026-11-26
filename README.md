@@ -1,6 +1,6 @@
 # xlocal
 
-Translate missing strings in Xcode String Catalogs (`.xcstrings`) and Android XML resources using the Anthropic API — right from your terminal.
+Translate missing strings in Xcode String Catalogs (`.xcstrings`) and Android XML resources using the Anthropic API or your Claude or ChatGPT subscription — right from your terminal.
 
 Android XML support is experimental. See [Android support](#android-support-experimental) for setup, local testing and current limitations.
 
@@ -26,11 +26,11 @@ go install github.com/MobilePur/xlocal@latest
 
 ```sh
 cd /path/to/YourApp
-xlocal init      # creates a config skeleton and checks your API key setup
+xlocal init      # creates a config skeleton and sets up your provider
 xlocal           # shows what's missing, then translates interactively
 ```
 
-`init` prefills languages found in your localization resources. For Android, it also selects standard `*/src/main/res` folders and sets the source language to English. Review the config and add any new target languages with `xlocal config`. If no API key is stored yet, `init` offers to add one to the macOS keychain. Get one at [console.anthropic.com](https://console.anthropic.com).
+`init` prefills languages found in your localization resources. For Android, it also selects standard `*/src/main/res` folders and sets the source language to English. Review the config and add any new target languages with `xlocal config`. `init` also asks which [provider](#providers) to use. With the Anthropic API it offers to add a key to the macOS keychain. Get one at [console.anthropic.com](https://console.anthropic.com).
 
 You can also run `xlocal` from a parent folder — it discovers Xcode and Android projects below and asks which one to use. Android projects are identified by `settings.gradle` or `settings.gradle.kts`.
 
@@ -40,9 +40,9 @@ You can also run `xlocal` from a parent folder — it discovers Xcode and Androi
 | --- | --- |
 | `xlocal` | The main flow: analyze → select → translate → review → save |
 | `xlocal status` | Read-only overview of missing translations (`--json` for CI) |
-| `xlocal init` | Set up the project: config skeleton (languages prefilled) + API key check |
+| `xlocal init` | Set up the project: config skeleton (languages prefilled) + provider setup |
 | `xlocal config` | Open the project config in `$VISUAL`/`$EDITOR` (falls back to vim) |
-| `xlocal config global` | Set the global default model and key |
+| `xlocal config global` | Menu for the global provider, model and API keys |
 | `xlocal keys add/list/remove/default` | Manage multiple API keys in the keychain |
 | `xlocal deintegrate` | Remove xlocal from the project: delete the config in the current folder |
 | `xlocal conventions` | Show the catalog conventions xlocal relies on |
@@ -73,6 +73,7 @@ You can also run `xlocal` from a parent folder — it discovers Xcode and Androi
 | `baseLanguages` | Languages offered as a "base languages only" batch — typically your source language(s) |
 | `untranslatableWords` | Brand/product names that must stay exactly as written |
 | `formalLanguages` | Languages that address the user formally (Sie/Vous) |
+| `provider` | `anthropic` (default, API key), `claude-cli` (Claude subscription) or `codex-cli` (ChatGPT subscription) — see [Providers](#providers) |
 | `model` | `sonnet` (default), `haiku`, `opus`, or a full model ID — overrides the global setting |
 | `exclude` | Directory names or relative paths to skip |
 | `excludeKeys` | String keys xlocal never translates |
@@ -82,6 +83,23 @@ You can also run `xlocal` from a parent folder — it discovers Xcode and Androi
 
 `Pods`, `DerivedData`, `node_modules`, `build`, `Carthage` and hidden directories are always skipped. Strings marked **Don't Translate** in Xcode (`shouldTranslate: false`), Android resources with `translatable="false"`, and keys without any translatable source text are skipped as well.
 
+### Providers
+
+By default xlocal calls the Anthropic API with an API key. As an alternative it can run the CLI you already use and bill your subscription instead:
+
+| `provider` | Backend | Needs |
+| --- | --- | --- |
+| `anthropic` | Anthropic API | API key (`xlocal keys add`) |
+| `claude-cli` | `claude -p` | [Claude Code](https://code.claude.com) installed and signed in |
+| `codex-cli` | `codex exec` | [Codex CLI](https://github.com/openai/codex) installed and signed in with ChatGPT |
+
+`xlocal init` always asks which provider to use — also in a project that already has a config, which it keeps unchanged. If you run `xlocal` before anything is set up, it asks the same question. Change it later with `xlocal config global` — a menu with submenus for provider, model and API keys — or per project via `provider` in `xlocal-config.json`. With a CLI provider no API key is requested.
+
+- `claude-cli` passes `model` (`sonnet`, `haiku`, `opus`, …) to `claude --model`.
+- `codex-cli` has no aliases: the Anthropic names are ignored and Codex uses its own default model. Set `model` to a Codex model name to choose another one.
+- Each string starts a CLI process, so this is slower than the API, and your subscription's usage limits apply. Codex also reads a lot of tokens per call.
+- xlocal only runs the unmodified CLI of the signed-in user and never touches its credentials. Whether a subscription may be used this way is up to the terms of Anthropic and OpenAI. Use the API key for shared or automated setups such as CI.
+
 ### Nested configuration (per folder)
 
 Like Git, xlocal supports a config in **any** folder. The top-level `strategy` field controls how a nested config relates to the configs above it:
@@ -89,7 +107,7 @@ Like Git, xlocal supports a config in **any** folder. The top-level `strategy` f
 - **`merge` is the default.** The root config and every nested merge config down to a catalog's folder are layered together. A nested config may be partial: fields it leaves out are inherited, while `targetLanguages`, `baseLanguages`, `formalLanguages` and `customPrompt` replace the inherited field when set.
 - **`override` starts fresh.** Configs above it are ignored for its entire subtree. The override config must therefore provide its own `targetLanguages`; it may also select its own model.
 - **`untranslatableWords` and `excludeKeys` accumulate.** A subfolder adds its own brand names / excluded keys on top of the inherited ones (deduplicated union).
-- **`model` stays inherited while merging.** A nested merge config cannot switch models; an override config can.
+- **`provider` and `model` stay inherited while merging.** A nested merge config cannot switch them; an override config can.
 - **Android resource paths belong to the config that declares them.** Nested configs can add module roots. `androidSourceLanguage` is inherited while merging and can be changed in a nested config.
 - **`exclude` is scoped.** An `exclude` entry only skips directories within the subtree of the config that declares it.
 
@@ -173,8 +191,8 @@ To translate, run:
 ```
 
 Use the arrow keys and Enter to select a file, then choose **First 3 keys**
-when that batch option is available. The command uses your configured Anthropic
-API key, shows the translation results, and asks before saving. If needed,
+when that batch option is available. The command uses your configured
+provider, shows the translation results, and asks before saving. If needed,
 store a key with `/private/tmp/xlocal-android-local/xlocal keys add`.
 After saving, run `status` again and inspect the generated locale XML.
 

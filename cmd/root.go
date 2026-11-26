@@ -15,8 +15,8 @@ import (
 
 	"github.com/MobilePur/xlocal/internal/analyze"
 	"github.com/MobilePur/xlocal/internal/android"
-	"github.com/MobilePur/xlocal/internal/anthropic"
 	"github.com/MobilePur/xlocal/internal/keychain"
+	"github.com/MobilePur/xlocal/internal/llm"
 	"github.com/MobilePur/xlocal/internal/settings"
 	"github.com/MobilePur/xlocal/internal/translate"
 	"github.com/MobilePur/xlocal/internal/ui"
@@ -33,9 +33,10 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "xlocal",
-	Short: "Translate missing Xcode and Android strings using the Anthropic API",
+	Short: "Translate missing Xcode and Android strings with Claude or ChatGPT",
 	Long: `xlocal scans .xcstrings String Catalogs and configured Android resource roots, shows which
-translations are missing, and fills the gaps using the Anthropic API.
+translations are missing, and fills the gaps using the Anthropic API or your
+Claude or ChatGPT subscription.
 
 Run it from anywhere inside your project (it finds the xlocal-config.json
 upwards), or from a parent folder (it discovers projects and asks).`,
@@ -116,11 +117,13 @@ func runTranslateFlow() error {
 	if err != nil {
 		return err
 	}
-	apiKey, err := resolveAPIKey(store, globalSettings, flagKey)
-	if err != nil {
-		return err
+	if needsProviderSetup(globalSettings, flagKey, batch, pc) {
+		if err := setupProviderForFirstRun(globalSettings); err != nil {
+			return err
+		}
 	}
-	clients, modelIDs, err := resolveClients(context.Background(), apiKey, batch, pc, globalSettings)
+	getKey := func() (string, error) { return resolveAPIKey(store, globalSettings, flagKey) }
+	clients, modelIDs, err := resolveClients(context.Background(), getKey, batch, pc, globalSettings)
 	if err != nil {
 		return err
 	}
@@ -132,7 +135,7 @@ func runTranslateFlow() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	clientFor := func(path string) *anthropic.Client {
+	clientFor := func(path string) llm.Completer {
 		return clients[path]
 	}
 	// Options are resolved per catalog: untranslatable words, formality and a
@@ -181,7 +184,7 @@ func runTranslateFlow() error {
 // runTranslations executes the worker pool with live per-item output. optsFor
 // yields the translation options for a catalog path, so each item is prompted
 // with the config effective at its own catalog.
-func runTranslations(ctx context.Context, clientFor func(path string) *anthropic.Client, batch []analyze.Missing, optsFor func(path string) translate.Options) []translate.Result {
+func runTranslations(ctx context.Context, clientFor func(path string) llm.Completer, batch []analyze.Missing, optsFor func(path string) translate.Options) []translate.Result {
 	done := 0
 	total := len(batch)
 	counterWidth := len(fmt.Sprint(total))
@@ -224,7 +227,7 @@ func runTranslations(ctx context.Context, clientFor func(path string) *anthropic
 }
 
 // retryFailures offers one interactive retry round for failed translations.
-func retryFailures(results []translate.Result, clientFor func(path string) *anthropic.Client, optsFor func(path string) translate.Options) []translate.Result {
+func retryFailures(results []translate.Result, clientFor func(path string) llm.Completer, optsFor func(path string) translate.Options) []translate.Result {
 	var failedIdx []int
 	for i, r := range results {
 		if r.Err != nil && r.Err != context.Canceled {

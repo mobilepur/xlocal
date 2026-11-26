@@ -15,6 +15,7 @@ import (
 	"github.com/MobilePur/xlocal/internal/android"
 	"github.com/MobilePur/xlocal/internal/anthropic"
 	"github.com/MobilePur/xlocal/internal/keychain"
+	"github.com/MobilePur/xlocal/internal/llm"
 	"github.com/MobilePur/xlocal/internal/project"
 	"github.com/MobilePur/xlocal/internal/settings"
 	"github.com/MobilePur/xlocal/internal/ui"
@@ -158,7 +159,7 @@ func addKeyInteractive(store keychain.SecretStore, s *settings.Settings) (string
 	name := "default"
 	var secret string
 
-	err := huh.NewForm(huh.NewGroup(
+	err := runMenuForm(
 		huh.NewInput().
 			Title("Name for this API key").
 			Description("You can store multiple keys (e.g. private, work) and switch with --key.").
@@ -183,7 +184,7 @@ func addKeyInteractive(store keychain.SecretStore, s *settings.Settings) (string
 				}
 				return nil
 			}),
-	)).Run()
+	)
 	if err != nil {
 		return "", err
 	}
@@ -236,14 +237,52 @@ func configuredModel(cfg *project.Config, s *settings.Settings) string {
 	return "sonnet"
 }
 
-// resolveClients prepares the model client effective for every selected
-// catalog. Merge configs inherit the root model; an override config can start
-// a subtree with its own model.
-func resolveClients(ctx context.Context, apiKey string, batch []analyze.Missing, pc *projectContext, s *settings.Settings) (map[string]*anthropic.Client, []string, error) {
-	byPath := make(map[string]*anthropic.Client)
-	byAlias := make(map[string]*anthropic.Client)
-	seenModel := make(map[string]bool)
-	var modelIDs []string
+// configuredProvider picks the backend (project config > global setting >
+// Anthropic API).
+func configuredProvider(cfg *project.Config, s *settings.Settings) (llm.Provider, error) {
+	if cfg.Provider != "" {
+		return llm.ParseProvider(cfg.Provider)
+	}
+	return llm.ParseProvider(s.Provider)
+}
+
+// cliModel maps the configured model to what a subscription CLI understands.
+// Claude Code accepts the same aliases and IDs as the API. Codex has no
+// aliases, so Anthropic names are dropped and Codex uses its own default.
+func cliModel(provider llm.Provider, model string) string {
+	if provider != llm.CodexCLI {
+		return model
+	}
+	switch model {
+	case "sonnet", "haiku", "opus":
+		return ""
+	}
+	if strings.HasPrefix(model, "claude-") {
+		return ""
+	}
+	return model
+}
+
+// newCLICompleter builds the subscription backend for a provider.
+func newCLICompleter(provider llm.Provider, model string) (llm.Completer, error) {
+	model = cliModel(provider, model)
+	if provider == llm.CodexCLI {
+		return llm.NewCodex(model)
+	}
+	return llm.NewClaude(model)
+}
+
+// resolveClients prepares the backend effective for every selected catalog.
+// Merge configs inherit the root model and provider; an override config can
+// start a subtree with its own. The API key is only requested (via getKey)
+// when at least one catalog actually uses the Anthropic API.
+func resolveClients(ctx context.Context, getKey func() (string, error), batch []analyze.Missing, pc *projectContext, s *settings.Settings) (map[string]llm.Completer, []string, error) {
+	byPath := make(map[string]llm.Completer)
+	byAlias := make(map[string]llm.Completer)
+	seenLabel := make(map[string]bool)
+	var labels []string
+	var apiKey string
+	haveKey := false
 
 	for _, item := range batch {
 		if _, ok := byPath[item.FilePath]; ok {
@@ -251,24 +290,49 @@ func resolveClients(ctx context.Context, apiKey string, batch []analyze.Missing,
 		}
 
 		cfg := pc.configFor(item.FilePath)
+		provider, err := configuredProvider(cfg, s)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", item.FilePath, err)
+		}
 		alias := configuredModel(cfg, s)
-		client, ok := byAlias[alias]
+		cacheKey := string(provider) + "/" + alias
+
+		client, ok := byAlias[cacheKey]
 		if !ok {
-			modelID, err := resolveModel(ctx, apiKey, cfg, s)
-			if err != nil {
-				return nil, nil, err
+			var label string
+			if provider.NeedsAPIKey() {
+				if !haveKey {
+					if apiKey, err = getKey(); err != nil {
+						return nil, nil, err
+					}
+					haveKey = true
+				}
+				modelID, err := resolveModel(ctx, apiKey, cfg, s)
+				if err != nil {
+					return nil, nil, err
+				}
+				client = anthropic.New(apiKey, modelID)
+				label = modelID
+			} else {
+				client, err = newCLICompleter(provider, alias)
+				if err != nil {
+					return nil, nil, err
+				}
+				label = string(provider)
+				if m := cliModel(provider, alias); m != "" {
+					label += ":" + m
+				}
 			}
-			client = anthropic.New(apiKey, modelID)
-			byAlias[alias] = client
-			if !seenModel[modelID] {
-				seenModel[modelID] = true
-				modelIDs = append(modelIDs, modelID)
+			byAlias[cacheKey] = client
+			if !seenLabel[label] {
+				seenLabel[label] = true
+				labels = append(labels, label)
 			}
 		}
 		byPath[item.FilePath] = client
 	}
 
-	return byPath, modelIDs, nil
+	return byPath, labels, nil
 }
 
 // analyzeProject loads and analyzes all catalogs of the project, sorted by
