@@ -35,7 +35,7 @@ homebrew_casks:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/MobilePur/xlocal
-    description: Translate missing strings in Xcode catalogs and Android XML using the Anthropic API
+    description: Translate missing strings in Xcode catalogs and Android XML with Claude or ChatGPT
     # The binaries are not notarized; drop the quarantine flag on install.
     hooks:
       post:

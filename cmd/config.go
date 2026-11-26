@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 
 	"github.com/MobilePur/xlocal/internal/project"
@@ -19,7 +18,7 @@ var configCmd = &cobra.Command{
 	Short: "Open the project config in your editor",
 	Long: `Opens the project's xlocal-config.json in $VISUAL or $EDITOR (falling back
 to vim) and validates it afterwards. Use "xlocal config global" for the
-global settings (model, default key).`,
+global settings (provider, model, default key).`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cwd, err := os.Getwd()
@@ -64,8 +63,12 @@ func editorCommand() []string {
 
 var configGlobalCmd = &cobra.Command{
 	Use:   "global",
-	Short: "Show or change the global settings (model, default key)",
-	Args:  cobra.NoArgs,
+	Short: "Change the global settings (provider, model, API keys)",
+	Long: `Opens a menu for the global settings: the provider (Anthropic API key,
+Claude subscription or ChatGPT subscription), the model and the stored API
+keys. Changes are saved immediately. A project's xlocal-config.json can
+override provider and model.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := settings.Load()
 		if err != nil {
@@ -73,54 +76,7 @@ var configGlobalCmd = &cobra.Command{
 		}
 
 		fmt.Println(ui.Dim.Render("Settings file: " + settings.Path()))
-
-		model := s.Model
-		if model == "" {
-			model = "sonnet"
-		}
-
-		fields := []huh.Field{
-			huh.NewSelect[string]().
-				Title("Model").
-				Description("Alias resolves to the newest matching model. Projects can override this in xlocal-config.json.").
-				Options(
-					huh.NewOption("sonnet — balanced (recommended)", "sonnet"),
-					huh.NewOption("haiku — fastest, cheapest", "haiku"),
-					huh.NewOption("opus — highest quality", "opus"),
-				).
-				Value(&model),
-		}
-
-		defaultKey := s.DefaultKey
-		if len(s.Keys) > 1 {
-			keyOptions := make([]huh.Option[string], 0, len(s.Keys))
-			for _, name := range s.Keys {
-				keyOptions = append(keyOptions, huh.NewOption(name, name))
-			}
-			fields = append(fields, huh.NewSelect[string]().
-				Title("Default API key").
-				Options(keyOptions...).
-				Value(&defaultKey))
-		}
-
-		if err := huh.NewForm(huh.NewGroup(fields...)).Run(); err != nil {
-			return err
-		}
-
-		s.Model = model
-		if defaultKey != "" {
-			s.DefaultKey = defaultKey
-		}
-		if err := s.Save(); err != nil {
-			return err
-		}
-
-		fmt.Printf("%s Saved: model %s", ui.Success.Render("✓"), ui.Accent.Render(model))
-		if s.DefaultKey != "" {
-			fmt.Printf(", default key %q", s.DefaultKey)
-		}
-		fmt.Println()
-		return nil
+		return newSettingsMenu(s).Run()
 	},
 }
 

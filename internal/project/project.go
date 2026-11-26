@@ -30,6 +30,7 @@ type Config struct {
 	UntranslatableWords []string `json:"untranslatableWords,omitempty"`
 	FormalLanguages     []string `json:"formalLanguages,omitempty"`
 	Model               string   `json:"model,omitempty"`
+	Provider            string   `json:"provider,omitempty"`
 	Exclude             []string `json:"exclude,omitempty"`
 	ExcludeKeys         []string `json:"excludeKeys,omitempty"`
 	CustomPrompt        string   `json:"customPrompt,omitempty"`
@@ -85,7 +86,7 @@ func (c *Config) clone() *Config {
 // Most fields override when the child sets them (a nil slice or empty string
 // means "not set, inherit"). untranslatableWords and excludeKeys accumulate as
 // a deduplicated union so global brand names keep applying while a subfolder
-// adds its own. Model is intentionally not taken from a merge layer. It stays
+// adds its own. Model and provider are intentionally not taken from a merge layer. It stays
 // inherited until an override config starts a fresh subtree.
 func Merge(base, override *Config) *Config {
 	if override.EffectiveStrategy() == StrategyOverride {

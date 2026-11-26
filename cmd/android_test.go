@@ -13,6 +13,7 @@ import (
 
 	"github.com/MobilePur/xlocal/internal/analyze"
 	"github.com/MobilePur/xlocal/internal/anthropic"
+	"github.com/MobilePur/xlocal/internal/llm"
 	"github.com/MobilePur/xlocal/internal/translate"
 )
 
@@ -102,7 +103,7 @@ func TestAndroidAnalyzeTranslateAndSave(t *testing.T) {
 	defer server.Close()
 	client := anthropic.New("test-key", "test-model")
 	client.BaseURL = server.URL
-	results := runTranslations(context.Background(), func(string) *anthropic.Client { return client }, batch, func(string) translate.Options { return translate.Options{} })
+	results := runTranslations(context.Background(), func(string) llm.Completer { return client }, batch, func(string) translate.Options { return translate.Options{} })
 	ok, failed := splitResults(results)
 	if len(ok) != 2 || len(failed) != 0 {
 		t.Fatalf("results: %+v", results)
@@ -172,7 +173,7 @@ func TestAndroidRejectsInvalidPlainFormatBeforeSaving(t *testing.T) {
 	defer server.Close()
 	client := anthropic.New("test", "test")
 	client.BaseURL = server.URL
-	results := runTranslations(context.Background(), func(string) *anthropic.Client { return client }, batch, func(string) translate.Options { return translate.Options{} })
+	results := runTranslations(context.Background(), func(string) llm.Completer { return client }, batch, func(string) translate.Options { return translate.Options{} })
 	ok, failed := splitResults(results)
 	if len(ok) != 0 || len(failed) != 1 {
 		t.Fatalf("unsafe Android translation allowed: %+v", results)

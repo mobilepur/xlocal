@@ -17,6 +17,7 @@ type Settings struct {
 	Keys       []string                   `json:"keys,omitempty"`
 	DefaultKey string                     `json:"defaultKey,omitempty"`
 	Model      string                     `json:"model,omitempty"`
+	Provider   string                     `json:"provider,omitempty"`
 	ModelCache map[string]ModelCacheEntry `json:"modelCache,omitempty"`
 }
 

@@ -12,16 +12,14 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/MobilePur/xlocal/internal/android"
-	"github.com/MobilePur/xlocal/internal/keychain"
 	"github.com/MobilePur/xlocal/internal/project"
-	"github.com/MobilePur/xlocal/internal/settings"
 	"github.com/MobilePur/xlocal/internal/ui"
 	"github.com/MobilePur/xlocal/internal/xcstrings"
 )
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Set up xlocal for this project: config skeleton and API key check",
+	Short: "Set up xlocal for this project: config skeleton and provider",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cwd, err := os.Getwd()
@@ -34,24 +32,25 @@ var initCmd = &cobra.Command{
 			return err
 		}
 
-		// Only block if a config already lives in the target folder itself. A
-		// config in an ancestor is fine: this becomes a nested config that
+		// An existing config in the target folder is kept as it is; init then
+		// only asks for the provider (e.g. after cloning a repository). A
+		// config in an ancestor is fine too: this becomes a nested config that
 		// inherits from it and overrides only the fields it sets.
 		configPath := filepath.Join(dir, project.ConfigFileName)
 		if _, err := os.Stat(configPath); err == nil {
-			return fmt.Errorf("there is already a config at %s — edit it with: xlocal config", configPath)
-		}
-		if parent := filepath.Dir(dir); parent != dir {
-			if ancestor, ok := project.FindConfigUpwards(parent); ok {
-				fmt.Println(ui.Dim.Render(fmt.Sprintf("Note: %s already exists above — this nested config inherits from it and only overrides the fields you set.", ancestor)))
+			fmt.Println(ui.Dim.Render(fmt.Sprintf("Keeping the existing config at %s — edit it with: xlocal config", configPath)))
+		} else {
+			if parent := filepath.Dir(dir); parent != dir {
+				if ancestor, ok := project.FindConfigUpwards(parent); ok {
+					fmt.Println(ui.Dim.Render(fmt.Sprintf("Note: %s already exists above — this nested config inherits from it and only overrides the fields you set.", ancestor)))
+				}
+			}
+			if _, err := createConfigSkeleton(dir); err != nil {
+				return err
 			}
 		}
 
-		if _, err := createConfigSkeleton(dir); err != nil {
-			return err
-		}
-
-		if err := checkAPIKey(); err != nil {
+		if err := setupProviderForInit(configPath); err != nil {
 			return err
 		}
 
@@ -251,41 +250,6 @@ func createConfigSkeleton(dir string) (*project.Config, error) {
 		AndroidResources:      skeleton.AndroidResources,
 		AndroidSourceLanguage: skeleton.AndroidSourceLanguage,
 	}, nil
-}
-
-// checkAPIKey verifies that an Anthropic API key is registered, offering to
-// add one right away if not.
-func checkAPIKey() error {
-	s, err := settings.Load()
-	if err != nil {
-		return err
-	}
-	if len(s.Keys) > 0 {
-		name := s.DefaultKey
-		if name == "" {
-			name = s.Keys[0]
-		}
-		fmt.Printf("%s API key %q is set up.\n", ui.Success.Render("✓"), name)
-		return nil
-	}
-
-	fmt.Println(ui.Warn.Render("⚠ No Anthropic API key stored yet."))
-	var addNow bool
-	err = huh.NewForm(huh.NewGroup(
-		huh.NewConfirm().
-			Title("Add an API key now?").
-			Description("Stored in the macOS keychain, never on disk. Get one at console.anthropic.com.").
-			Value(&addNow),
-	)).Run()
-	if err != nil {
-		return err
-	}
-	if !addNow {
-		fmt.Println(ui.Dim.Render("Add one later with: xlocal keys add"))
-		return nil
-	}
-	_, err = addKeyInteractive(keychain.New(), s)
-	return err
 }
 
 // detectLanguages scans the project's catalogs and returns all languages
